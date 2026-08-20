@@ -41,3 +41,16 @@ KMI、符号白名单、模块签名和内核 release 任一不匹配都会导�
 - 把 `/dev/video100 0660 system camera` 合并到设备的 `vendor/ueventd.rc`。
 - 模块必须在 `class core` 前载入；可按设备 init 结构改写
   `aosp/init/init.vcames-kernel.rc.example`。
+
+## 已 Root 原厂系统
+
+Root Bridge 不改变上面的内核事实：
+
+- Pixel 4/4a/5/5a：需要为当前原厂 `uname -r`、config 和 clang 构建的模块，并通过该
+  boot kernel 的模块签名/版本校验；否则使用包含 v4l2loopback 的 custom boot kernel。
+- Pixel 6/6 Pro/6a：必须符合当前 GKI KMI 与签名链。任意下载的 arm64 `.ko` 即使 Android
+  版本相同也不能视为兼容，通常应随同一 Pixel kernel build 生成并放入 vendor_dlkm，
+  或使用已经集成驱动的可信 custom kernel。
+- 所有机型还要通过 `external/0` Provider 检查。Magisk 在 late_start 阶段才启动脚本，
+  而 stock `hwservicemanager` 可能已经缓存 VINTF；这种情况下需 custom boot 的早期 init
+  接入或匹配的 vendor 修改，不能靠 `setenforce 0` 修复。

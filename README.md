@@ -1,11 +1,12 @@
 # VCamES
 
-VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 定制系统的系统级虚拟相机。
+VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 的系统级虚拟相机，支持定制 ROM
+原生集成，以及满足内核/Provider 前提的已 Root 原厂系统。
 它不使用 Xposed，也不向目标应用注入代码。视频帧由系统守护进程写入
 `/dev/video100`，再由 AOSP External Camera Provider 通过 Camera2/CameraX 暴露给应用。
 
-> 这不是可直接安装到原厂只读系统的普通 APK。完整功能必须在已解锁设备上随
-> AOSP/LineageOS 系统镜像、匹配该镜像内核的 v4l2loopback，以及 SELinux 策略一起构建。
+> 这不是靠一个 APK 就能实现的相机替换。定制 ROM 需完整 AOSP 集成；Root 原厂模式至少
+> 需要兼容的内核 loopback 与已注册的 External Camera Provider，Root 权限本身不等于兼容。
 
 ## 已实现
 
@@ -17,6 +18,8 @@ VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 定制系统的系统级虚
   `external_camera_config.xml` 与 SELinux 策略。
 - Pixel 4/4a/5/5a（4.14/4.19）和 Pixel 6/6 Pro/6a（5.10 GKI）的内核接入说明。
 - Windows FFmpeg MJPEG 发送脚本、ADB 设备验收脚本、Gradle/CMake 测试和 CI。
+- Root Bridge：普通签名 APK、受 UID 限制的 Root 守护进程、Magisk 模块模板、
+  v4l2loopback/External Provider 可选 payload 和原厂兼容性预检。
 
 ## 数据路径
 
@@ -34,12 +37,13 @@ VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 定制系统的系统级虚
 
 ## 快速构建
 
-普通 Gradle 构建只能验证控制界面，不能让未修改的原厂系统获得虚拟相机：
+普通 Gradle 构建会生成 system/root 两个控制端，但 APK 自身不会创造内核相机设备：
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Android\openjdk\jdk-21.0.8'
 $env:ANDROID_HOME = 'C:\Program Files (x86)\Android\android-sdk'
-.\gradlew.bat :app:assembleDebug :app:lintDebug
+.\gradlew.bat :app:assembleSystemDebug :app:assembleRootDebug `
+  :app:lintSystemDebug :app:lintRootDebug
 ```
 
 AOSP 集成的入口如下：
@@ -63,6 +67,27 @@ m VCamES vcamesd android.hardware.camera.provider@2.4-external-service
 
 详细步骤见 [AOSP 集成](docs/AOSP_INTEGRATION.md) 和
 [Pixel 支持矩阵](docs/PIXEL_SUPPORT.md)。
+
+## 已 Root 原厂系统
+
+先运行只读兼容性检查：
+
+```powershell
+.\tools\adb\check-root-stock.ps1
+```
+
+只有 `/dev/video100` 和 `camera.provider ... external/0` 都可用时，Magisk-only 部署才是
+直接可用状态。否则需为当前 `uname -r` 提供完全匹配的 v4l2loopback，或提供同 Android
+版本的 External Provider/早期 VINTF 接入。打包入口：
+
+```powershell
+.\tools\root\build-root-module.ps1 -Api 35 `
+  -KernelModule C:\pixel-kernel\v4l2loopback.ko `
+  -ProviderBinary C:\aosp-out\android.hardware.camera.provider@2.4-external-service
+```
+
+Root 方案保持 SELinux enforcing，不使用 Zygisk/Xposed。详细前提和失败状态见
+[原厂 Root 部署](docs/ROOT_STOCK.md)。
 
 ## 视频源
 

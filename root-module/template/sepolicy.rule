@@ -1,0 +1,7 @@
+# Permit only ordinary application domains to connect to the Magisk-hosted
+# abstract Unix socket. vcamesd still checks SO_PEERCRED against one numeric UID.
+allow untrusted_app_all magisk:unix_stream_socket connectto
+
+# vcamesd and an optional matching external provider run in Magisk's domain.
+allow magisk video_device:chr_file { getattr open read write ioctl map lock }
+allow magisk hal_camera_hwservice:hwservice_manager { add find }

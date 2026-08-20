@@ -11,8 +11,19 @@ android {
         applicationId = "io.github.gushu101.vcames"
         minSdk = 33
         targetSdk = 35
-        versionCode = 10000
-        versionName = "1.0.0"
+        versionCode = 10100
+        versionName = "1.1.0"
+    }
+
+    flavorDimensions += "deployment"
+    productFlavors {
+        create("system") {
+            dimension = "deployment"
+        }
+        create("root") {
+            dimension = "deployment"
+            versionNameSuffix = "-root"
+        }
     }
 
     buildTypes {

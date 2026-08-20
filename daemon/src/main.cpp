@@ -15,8 +15,11 @@
 
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <iostream>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -34,6 +37,7 @@ constexpr uint32_t kMaxFrameBytes = 16 * 1024 * 1024;
 std::atomic<bool> g_stop{false};
 std::atomic<int> g_control_listener{-1};
 std::atomic<int> g_frame_listener{-1};
+std::atomic<uid_t> g_extra_allowed_uid{static_cast<uid_t>(-1)};
 
 void Log(const std::string& message) {
 #ifdef __ANDROID__
@@ -94,10 +98,37 @@ bool IsAllowedPeer(int fd) {
         return false;
     }
 #ifdef __ANDROID__
-    return credentials.uid == 0 || credentials.uid == 1000;
+    return credentials.uid == 0 || credentials.uid == 1000
+            || credentials.uid == g_extra_allowed_uid.load(std::memory_order_relaxed);
 #else
-    return credentials.uid == getuid();
+    return credentials.uid == getuid()
+            || credentials.uid == g_extra_allowed_uid.load(std::memory_order_relaxed);
 #endif
+}
+
+bool ParseArguments(int argc, char** argv, std::string* error) {
+    if (argc == 1) {
+        return true;
+    }
+    if (argc != 3 || std::string_view(argv[1]) != "--allowed-uid") {
+        if (error != nullptr) {
+            *error = "usage: vcamesd [--allowed-uid APP_UID]";
+        }
+        return false;
+    }
+    unsigned long parsed = 0;
+    const std::string_view text(argv[2]);
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+    if (text.empty() || result.ec != std::errc()
+            || result.ptr != text.data() + text.size()
+            || parsed < 10000 || parsed > 2'000'000) {
+        if (error != nullptr) {
+            *error = "allowed app UID must be an Android application UID";
+        }
+        return false;
+    }
+    g_extra_allowed_uid.store(static_cast<uid_t>(parsed), std::memory_order_relaxed);
+    return true;
 }
 
 bool ReadExact(int fd, void* output, size_t size) {
@@ -255,12 +286,16 @@ void FrameServer(int listener, vcames::Engine* engine) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    std::string error;
+    if (!ParseArguments(argc, argv, &error)) {
+        Log(error);
+        return 64;
+    }
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
 
-    std::string error;
     const int control_listener = CreateAbstractListener(kControlSocketName, &error);
     if (control_listener < 0) {
         Log(error);

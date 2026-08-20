@@ -3,7 +3,8 @@
 提交前请运行：
 
 ```bash
-./gradlew :app:assembleDebug :app:lintDebug
+./gradlew :app:assembleSystemDebug :app:assembleRootDebug \
+  :app:lintSystemDebug :app:lintRootDebug
 cmake -S daemon -B out/host -G Ninja
 cmake --build out/host
 ctest --test-dir out/host --output-on-failure

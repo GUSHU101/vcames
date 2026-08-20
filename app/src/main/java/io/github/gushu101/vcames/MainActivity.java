@@ -205,8 +205,8 @@ public final class MainActivity extends Activity {
         root.addView(actions, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("系统相机显示为 external camera。首次刷入后请先确认 /dev/video100、"
-                + "external/0 Provider 和 vcamesd 均已启动；普通 APK 安装方式不能获得这些能力。");
+        note.setText("系统相机显示为 external camera。首次部署后请先确认 /dev/video100、"
+                + "external/0 Provider 和 vcamesd 均已启动；控制 APK 必须配合 ROM 集成或 Root Bridge。");
         note.setTextSize(13);
         note.setTextColor(Color.DKGRAY);
         note.setPadding(0, dp(16), 0, 0);
