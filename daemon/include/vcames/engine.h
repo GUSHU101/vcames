@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vcames/config.h"
+#include "vcames/shared_frame_bus.h"
 
 #include <atomic>
 #include <chrono>
@@ -25,12 +26,15 @@ public:
     void Stop();
     bool PushFrame(std::vector<uint8_t>&& jpeg, std::string* error);
     std::string StatusJson() const;
+    int DuplicateFrameBusFd(std::string* error) const;
+    std::string FrameBusDescriptor() const;
 
 private:
     struct RuntimeStatus {
         bool running = false;
         bool source_connected = false;
         bool sink_open = false;
+        bool frame_bus_ready = false;
         uint64_t frames_received = 0;
         uint64_t frames_written = 0;
         uint64_t frames_dropped = 0;
@@ -54,6 +58,7 @@ private:
     std::atomic<bool> stop_requested_{false};
     std::thread source_thread_;
     std::thread writer_thread_;
+    SharedFrameBus frame_bus_;
 };
 
 }  // namespace vcames

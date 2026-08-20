@@ -24,7 +24,7 @@ Android 13 起 Camera HAL 新开发使用稳定 AIDL，同时框架仍兼容既�
 设备专用二进制安装为 `bin/vcames-camera-adapter`，由 Root Bridge 以以下参数启动：
 
 ```text
-vcames-camera-adapter --serve --socket vcames-camera-adapter --frame-device /dev/video100
+vcames-camera-adapter --serve --socket vcames-camera-adapter
 ```
 
 它必须监听名为 `vcames-camera-adapter` 的 Linux abstract `AF_UNIX` socket，只允许 Root 模式
@@ -38,8 +38,20 @@ device=/dev/video100
 width=1280
 height=720
 fps=30
+transport=memfd-ring-v1
+bus_version=1
+header_size=4096
+slot_count=3
+slot_capacity=16777216
+format=jpeg
 .
 ```
+
+`ACTIVATE` 的首次 `recvmsg` 同时携带一个 `SCM_RIGHTS` fd。adapter 必须验证 header magic
+`VCFBUS1\0`、版本、尺寸和槽边界，使用 `published_sequence` 找最新槽，并以
+`write_epoch` 前后相同且为偶数作为完整帧判据。fd 缺失、格式未知或尺寸越界必须拒绝。
+`published_sequence=0` 表示当前没有有效帧（例如 `hold_last=false` 且来源超时），adapter
+应按其显式策略输出黑帧或停止当前 request，不能继续重放旧槽。
 
 只有适配器已经把目标 camera pipeline 安全切换到虚拟帧时，才能返回 `OK\n`。错误应返回
 稳定、可读的单行原因。停止/切回 external 时 daemon 发送：
@@ -53,19 +65,27 @@ DEACTIVATE
 
 ## 精确构建绑定
 
-先在目标手机连接 ADB，并允许 shell 的 Magisk ROOT 请求：
+先生成目标构建的 adapter，再在目标手机连接 ADB，并允许 shell 的 KernelSU/Magisk ROOT：
 
 ```powershell
-.\tools\adb\capture-camera-compatibility.ps1
+.\tools\adb\capture-camera-compatibility.ps1 `
+  -AdapterPath C:\pixel-build\vcames-camera-adapter
 ```
 
 生成文件包含：
 
 ```properties
+manufacturer=Google
+product=redfin
 device=redfin
 api=34
-fingerprint_sha256=<ro.build.fingerprint 的无换行 SHA-256>
+system_fingerprint_sha256=<ro.build.fingerprint 的无换行 SHA-256>
+vendor_fingerprint_sha256=<ro.vendor.build.fingerprint 的无换行 SHA-256>
 cameraserver_sha256=</system/bin/cameraserver 的 SHA-256>
+camera_provider_sha256=<Camera Provider 文件集合聚合 SHA-256>
+graphics_stack_sha256=<mapper/allocator 文件集合聚合 SHA-256>
+adapter_sha256=<adapter SHA-256>
+compatibility_id=<规范字段 SHA-256>
 ```
 
 打包时同时传入适配器和清单：
@@ -77,7 +97,7 @@ cameraserver_sha256=</system/bin/cameraserver 的 SHA-256>
   -KernelModule C:\pixel-build\v4l2loopback.ko
 ```
 
-模块安装器会在写入 `/data/adb/modules` 前比较全部四项。OTA、设备或 cameraserver 任一变化
+模块安装器会在启用 payload 前比较全部字段。OTA、设备、Provider 或图形栈任一变化
 都会中止安装。清单不是“兼容声明”的替代品：适配器本身仍需对该构建做 Camera CTS/VTS、
 前后切换、预览/录像/拍照、并发 camera、旋转和长时间稳定性测试。
 
@@ -92,7 +112,8 @@ init 与 SELinux；这是最可维护的前后替换方案。Root 原厂兼容�
 
 | 状态 | 能力 |
 |---|---|
-| `READY_EXTERNAL_ONLY` | 仅 external |
-| `READY_REPLACEMENT_ONLY` | 仅 front/back/both |
-| `READY_EXTERNAL_AND_REPLACEMENT` | 两条路径都可用 |
+| `READY_EXTERNAL` | external 基础链路已就绪 |
+| `READY_REPLACEMENT_UNVERIFIED` | replacement 数据通道已启动，尚未通过真机内容自检 |
+| `READY_EXTERNAL_AND_REPLACEMENT_UNVERIFIED` | 两条基础链路都已启动，replacement 尚未验证 |
 | `REPLACEMENT_ADAPTER_START_FAILED` | 已打包适配器但启动失败 |
+| `SAFE_MODE_REPLACEMENT_DISABLED` | 连续失败触发 BootGuard，external 可继续救援 |

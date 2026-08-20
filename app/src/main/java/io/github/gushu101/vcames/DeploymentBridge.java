@@ -7,6 +7,8 @@ interface DeploymentBridge {
 
     String authorizeAndDeploy(Context context);
 
+    String diagnostics(Context context);
+
     static DeploymentBridge create() {
         return new VariantDeploymentBridge();
     }

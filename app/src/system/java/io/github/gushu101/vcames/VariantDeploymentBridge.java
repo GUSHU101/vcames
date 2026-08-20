@@ -13,4 +13,10 @@ final class VariantDeploymentBridge implements DeploymentBridge {
         return "系统版不调用 su。请确认 APK 使用平台证书签名，并已把 vcamesd、"
                 + "Camera Provider/替换适配器和 SELinux 策略集成进同一 ROM 构建。";
     }
+
+    @Override
+    public String diagnostics(Context context) {
+        return "deployment=system\nroot_manager=not_used\n"
+                + "integration=platform_signature_and_rom_payload_required";
+    }
 }

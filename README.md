@@ -1,17 +1,20 @@
 # VCamES
 
-VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 的系统级虚拟相机，支持定制 ROM
+VCamES 是面向 Pixel 4–Pixel 6、Android 11–15 的系统级虚拟相机，支持定制 ROM
 原生集成，以及满足内核/Provider 前提的已 Root 原厂系统。
 它不使用 Xposed，也不向目标应用注入代码。通用模式由系统守护进程写入
 `/dev/video100`，再由 AOSP External Camera Provider 通过 Camera2/CameraX 暴露；前置、
 后置或双摄替换则要求与单一 Pixel OTA 指纹完全匹配的 Camera HAL 适配器。
 
-> standalone Root APK 可以申请 Magisk 授权并安装内置 Bridge，但它不能凭空生成与当前
+> standalone Root APK 可以申请 KernelSU/Magisk 授权并安装内置 Bridge，但它不能凭空生成与当前
 > 内核/Camera HAL 匹配的二进制。构建 APK 时仍须提供目标原厂构建所需的 payload。
+
+[工程方案落实表](docs/ENGINEERING_PLAN_TRACEABILITY.md) 记录了本轮开发文档中每项要求的
+实现状态和仍需真机/厂商适配的边界。
 
 ## 已实现
 
-- Android 13–15 控制应用：本地视频循环、HTTP MJPEG、分辨率、FPS、旋转、镜像、
+- Android 11–15 控制应用：本地视频循环、HTTP MJPEG、分辨率、FPS、旋转、镜像、
   中心裁切、断流保持、开机恢复和运行状态。
 - `vcamesd` 原生守护进程：低延迟 latest-frame 队列、丢弃积压帧、MJPEG 重连、
   JPEG 安全限制、V4L2 输出和仅 UID 0/1000 可用的控制/推帧协议。
@@ -19,10 +22,12 @@ VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 的系统级虚拟相机，
   `external_camera_config.xml` 与 SELinux 策略。
 - Pixel 4/4a/5/5a（4.14/4.19）和 Pixel 6/6 Pro/6a（5.10 GKI）的内核接入说明。
 - Windows FFmpeg MJPEG 发送脚本、ADB 设备验收脚本、Gradle/CMake 测试和 CI。
-- Root Bridge：普通签名 APK、受 UID 限制的 Root 守护进程、Magisk 模块模板、
+- Root Bridge：普通签名 APK、受 UID 限制的 Root 守护进程、KernelSU/Magisk 模块模板、
   应用内 ROOT 授权/模块安装、standalone APK、v4l2loopback/Provider 可选 payload。
-- `external/front/back/both` 目标选择；前后替换使用独立适配器 socket，并在安装时校验
-  设备、API、完整 fingerprint 和 cameraserver 的 SHA-256。
+- `external/front/back/both` 目标选择；前后替换使用三槽 memfd FrameBus，并在安装时校验
+  设备、API、system/vendor fingerprint、cameraserver、Provider、图形栈及 adapter 哈希。
+- APK 一键导出设备/Camera2/Root 能力画像；BootGuard 连续失败三次后禁用 replacement，
+  保留 external 链路和 last-known-good 记录。
 
 ## 数据路径
 
@@ -31,12 +36,12 @@ VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 的系统级虚拟相机，
                  │
           VCamES App / vcamesd
                  │ JPEG
-          /dev/video100 (V4L2)
-                 │
-       ┌─────────┴─────────┐
- AOSP External Provider   精确构建 Camera HAL adapter
-       │ external ID       │ 原 front/back ID
-       └─────────┬─────────┘
+        ┌────────┴────────┐
+ /dev/video100 (V4L2)    memfd-ring-v1 FrameBus
+        │                 │
+ AOSP External Provider  精确构建 Camera HAL adapter
+        │ external ID     │ 原 front/back ID/metadata
+        └────────┬────────┘
         CameraService → Camera2/CameraX 应用
 ```
 
@@ -81,9 +86,9 @@ m VCamES vcamesd android.hardware.camera.provider@2.4-external-service
 .\tools\adb\check-root-stock.ps1
 ```
 
-只有 `/dev/video100` 和 `camera.provider ... external/0` 都可用时，Magisk-only 部署才是
-直接可用状态。否则需为当前 `uname -r` 提供完全匹配的 v4l2loopback，或提供同 Android
-版本的 External Provider/早期 VINTF 接入。打包入口：
+external 模式要求 `/dev/video100` 和 `camera.provider ... external/0`；replacement-only
+模式不再要求 V4L2，但必须提供精确 OTA 适配器。KernelSU v3 的 system/vendor overlay
+还需设备已配置 metamodule。打包入口：
 
 ```powershell
 .\tools\root\build-root-module.ps1 -Api 35 `
@@ -92,8 +97,9 @@ m VCamES vcamesd android.hardware.camera.provider@2.4-external-service
 ```
 
 构建器同时生成 `VCamES-Root-standalone.apk`。安装后点击“授权 ROOT 并部署”，应用会把内置
-Bridge 交给 Magisk，完成后重启。前后摄像头模式还需传入 `-ReplacementAdapter` 和
-`-CompatibilityManifest`，详见 [前后摄像头替换](docs/FRONT_BACK_REPLACEMENT.md)。
+Bridge 交给 KernelSU/Magisk，完成后重启。前后摄像头模式还需传入 `-ReplacementAdapter`
+和 `-CompatibilityManifest`，详见 [前后摄像头替换](docs/FRONT_BACK_REPLACEMENT.md)、
+[设备画像](docs/DEVICE_PROFILING.md) 与 [真机验收门槛](docs/VALIDATION_PLAN.md)。
 
 Root 方案保持 SELinux enforcing，不使用 Zygisk/Xposed。详细前提和失败状态见
 [原厂 Root 部署](docs/ROOT_STOCK.md)。

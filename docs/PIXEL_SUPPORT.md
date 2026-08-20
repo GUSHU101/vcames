@@ -1,16 +1,17 @@
 # Pixel 4–6 支持矩阵
 
-VCamES 的应用层统一要求 API 33–35；差异集中在 ROM 和内核。
+VCamES 2.0 的应用层统一要求 API 30–35；差异集中在 ROM、内核和 Camera HAL。表格描述
+系统基础可获得性，不代表仓库已经对每个 OTA 的前/后替换完成验证。
 
-| 设备 | 代号 | 常见内核 | Android 13 | Android 14 | Android 15 |
-|---|---|---:|---|---|---|
-| Pixel 4 / 4 XL | `flame` / `coral` | 4.14 | 原厂/AOSP | 自定义 ROM | 自定义 ROM |
-| Pixel 4a | `sunfish` | 4.14 | 原厂/AOSP | 自定义 ROM | 自定义 ROM |
-| Pixel 4a 5G | `bramble` | 4.19 | 原厂/AOSP | 原厂/AOSP | 自定义 ROM |
-| Pixel 5 | `redfin` | 4.19 | 原厂/AOSP | 原厂/AOSP | 自定义 ROM |
-| Pixel 5a | `barbet` | 4.19 | 原厂/AOSP | 原厂/AOSP | 自定义 ROM |
-| Pixel 6 / 6 Pro | `oriole` / `raven` | 5.10 GKI | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP |
-| Pixel 6a | `bluejay` | 5.10 GKI | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP |
+| 设备 | 代号 | 常见内核 | Android 11 | Android 12 | Android 13 | Android 14 | Android 15 |
+|---|---|---:|---|---|---|---|---|
+| Pixel 4 / 4 XL | `flame` / `coral` | 4.14 | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 自定义 ROM | 自定义 ROM |
+| Pixel 4a | `sunfish` | 4.14 | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 自定义 ROM | 自定义 ROM |
+| Pixel 4a 5G | `bramble` | 4.19 | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 自定义 ROM |
+| Pixel 5 | `redfin` | 4.19 | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 自定义 ROM |
+| Pixel 5a | `barbet` | 4.19 | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 自定义 ROM |
+| Pixel 6 / 6 Pro | `oriole` / `raven` | 5.10 GKI | 不适用 | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP |
+| Pixel 6a | `bluejay` | 5.10 GKI | 不适用 | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP | 原厂/AOSP |
 
 “原厂/AOSP”表示 Google 为该组合发布过官方系统基础，但 VCamES 仍然要求重新构建并刷入
 修改后的系统和内核；不能在锁定、未修改的原厂镜像上仅安装 APK。
@@ -51,6 +52,8 @@ Root Bridge 不改变上面的内核事实：
 - Pixel 6/6 Pro/6a：必须符合当前 GKI KMI 与签名链。任意下载的 arm64 `.ko` 即使 Android
   版本相同也不能视为兼容，通常应随同一 Pixel kernel build 生成并放入 vendor_dlkm，
   或使用已经集成驱动的可信 custom kernel。
-- 所有机型还要通过 `external/0` Provider 检查。Magisk 在 late_start 阶段才启动脚本，
+- external 模式还要通过 `external/0` Provider 检查。Root 模块在 late_start 阶段才启动脚本，
   而 stock `hwservicemanager` 可能已经缓存 VINTF；这种情况下需 custom boot 的早期 init
   接入或匹配的 vendor 修改，不能靠 `setenforce 0` 修复。
+- replacement-only 通过 FrameBus 工作，不需要 `/dev/video100`，但仍需要锁定完整 OTA 的
+  adapter，并按 [真机验收门槛](VALIDATION_PLAN.md) 完成内容级验证。

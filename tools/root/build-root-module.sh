@@ -2,7 +2,7 @@
 set -euo pipefail
 
 API="${1:-35}"
-case "$API" in 33|34|35) ;; *) echo "API must be 33, 34, or 35" >&2; exit 64 ;; esac
+case "$API" in 30|31|32|33|34|35) ;; *) echo "API must be between 30 and 35" >&2; exit 64 ;; esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="$ROOT_DIR/out/root"
@@ -53,7 +53,7 @@ elif [[ -n "${VCAMES_COMPATIBILITY_MANIFEST:-}" ]]; then
 fi
 
 # Embed a controller-free module into the Root APK. Since the app is already
-# installed when it invokes Magisk, customize.sh accepts this standalone form.
+# installed when it invokes the root manager, customize.sh accepts this form.
 GENERATED_ASSETS="$ROOT_DIR/app/build/generated/rootBridgeAssets"
 mkdir -p "$GENERATED_ASSETS"
 rm -f -- "$GENERATED_ASSETS/vcames-root-bridge.zip"

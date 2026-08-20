@@ -2,13 +2,14 @@
 
 ## External 与前后替换
 
-Android 13–15 的 CameraService 只能通过相机 HAL 获得系统相机。VCamES 选择 AOSP 已有的
+Android 11–15 的 CameraService 只能通过相机 HAL 获得系统相机。VCamES 选择 AOSP 已有的
 External Camera Provider：它监听 `/dev/video*`，把符合 V4L2 capture 规范的节点注册为
 Camera HAL 3.x 外置相机。v4l2loopback 同时提供 output 端给 `vcamesd`、capture 端给 Provider。
 
 这条路径不会修改应用进程，不依赖 Xposed，也不使用参考 APK 中的私有符号 hook。
-`front/back/both` 由一个设备构建专用的 Camera HAL adapter 保留原 camera ID 并替换输出
-buffer；通用 daemon 只通过受限 socket 激活它，不持有 cameraserver 私有 ABI。
+`front/back/both` 由一个设备构建专用的 Camera HAL adapter 保留原 camera ID 和 metadata，
+仅替换输出 buffer；通用 daemon 通过受限 socket 激活它，并以 `SCM_RIGHTS` 传递
+`memfd-ring-v1` FrameBus，不持有 cameraserver 私有 ABI。
 
 ## 组件
 
@@ -18,14 +19,18 @@ buffer；通用 daemon 只通过受限 socket 激活它，不持有 cameraserver
 | `vcamesd` | `system_ext/bin`、独立 SELinux domain | HTTP MJPEG、变换、限流、V4L2 写入 |
 | v4l2loopback | kernel/vendor_dlkm | `/dev/video100` 环形帧设备 |
 | External Provider | vendor HAL | V4L2 capture → Camera HAL 3.6 |
-| Camera adapter（可选） | vendor HAL/精确 Root payload | 原前后 camera ID → V4L2 虚拟帧 |
+| Camera adapter（可选） | vendor HAL/精确 Root payload | 原前后 camera ID → FrameBus 最新帧 |
 
 ## 控制协议
 
 三个 Linux abstract `AF_UNIX` socket：`vcamesd` 接收文本命令，`vcamesd_frames` 接收
 `VCF1` 魔数和 big-endian 长度前缀 JPEG。服务端使用 `SO_PEERCRED` 拒绝 UID 0/1000
 之外的连接；SELinux 仅允许 `system_app` 连接 `vcamesd` domain。可选
-`vcames-camera-adapter` 接收 ACTIVATE/DEACTIVATE，只应接受 UID 0。
+`vcames-camera-adapter` 接收 ACTIVATE/DEACTIVATE，只应接受 UID 0/系统相机 UID。
+
+FrameBus v1 是 3 槽、latest-frame、sequence-lock 共享内存环：header 固定 4 KiB，槽保存
+sequence、PTS、到达时间、宽高、格式和 payload 长度。当前格式为 JPEG；YUV/AHardwareBuffer
+是后续兼容版本，不能在未更新 adapter 的情况下静默改变 wire format。
 
 ## 延迟和故障处理
 

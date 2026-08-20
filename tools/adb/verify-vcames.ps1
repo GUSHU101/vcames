@@ -35,7 +35,7 @@ $api = 0
 [void][int]::TryParse($apiText, [ref]$api)
 $checks = [ordered]@{
     'Pixel 4-6' = $model -match 'Pixel (4|5|6)'
-    'API 33-35' = $api -ge 33 -and $api -le 35
+    'API 30-35' = $api -ge 30 -and $api -le 35
     'SELinux enforcing' = $enforcing -eq 'Enforcing'
     'vcamesd running' = $service -eq 'running'
     '/dev/video100' = -not [string]::IsNullOrWhiteSpace($node)

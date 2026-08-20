@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateRange(33, 35)]
+    [ValidateRange(30, 35)]
     [int]$Api = 35,
     [string]$NdkPath = '',
     [string]$DaemonBinary = '',
@@ -156,7 +156,7 @@ try {
     }
 }
 
-Write-Host "Magisk 模块：$outputFull"
+Write-Host "KernelSU/Magisk 模块：$outputFull"
 Write-Host "控制 APK：$(Join-Path $outputDirectory 'VCamES-Root-controller.apk')"
 if (Test-Path -LiteralPath $standaloneOutput) {
     Write-Host "一体化 Root APK：$standaloneOutput"

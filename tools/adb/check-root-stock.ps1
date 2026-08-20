@@ -20,7 +20,7 @@ if ($LASTEXITCODE -ne 0) { throw '没有可用的 ADB 设备。' }
 
 $rootUid = Invoke-RootShell 'id -u'
 if ($rootUid -ne '0') {
-    throw "未获得 Root shell。请在 Magisk/Superuser 中允许 ADB shell；返回：$rootUid"
+    throw "未获得 Root shell。请在 KernelSU/Magisk 中允许 ADB shell；返回：$rootUid"
 }
 
 $model = Invoke-Shell 'getprop ro.product.model'
@@ -48,7 +48,7 @@ Write-Host "Root：UID $rootUid · SELinux：$selinux"
 Write-Host "内核配置：$kernelConfig"
 Write-Host
 Write-Host ($(if ($supportedDevice) {'[PASS]'} else {'[FAIL]'}) + ' Pixel 4-6 设备代号')
-Write-Host ($(if ($api -ge 33 -and $api -le 35) {'[PASS]'} else {'[FAIL]'}) + ' API 33-35')
+Write-Host ($(if ($api -ge 30 -and $api -le 35) {'[PASS]'} else {'[FAIL]'}) + ' API 30-35')
 Write-Host ($(if ($selinux -eq 'Enforcing') {'[PASS]'} else {'[FAIL]'}) + ' SELinux enforcing')
 Write-Host ($(if ($hasVideo) {'[PASS]'} else {'[NEED]'}) + ' /dev/video100')
 Write-Host ($(if ($card -match 'VCamES') {'[PASS]'} else {'[INFO]'}) + " card=$card module=$module")
@@ -56,7 +56,7 @@ Write-Host ($(if ($hasProvider) {'[PASS]'} else {'[NEED]'}) + ' camera provider 
 Write-Host "Stock Provider binary：$providerBinary"
 Write-Host "Stock VINTF：$manifest"
 
-if ($supportedDevice -and $api -ge 33 -and $api -le 35 -and
+if ($supportedDevice -and $api -ge 30 -and $api -le 35 -and
         $selinux -eq 'Enforcing' -and $hasVideo -and $hasProvider) {
     Write-Host "`nREADY：可安装不含内核/Provider payload 的 Root Bridge。"
     exit 0

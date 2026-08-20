@@ -201,16 +201,28 @@ void HandleControlClient(int fd, vcames::Engine* engine) {
     }
     switch (command.type) {
         case vcames::CommandType::kStart:
-            if (!vcames::ActivateReplacementAdapter(command.config, &error)) {
+            vcames::DeactivateReplacementAdapter();
+            if (!engine->Start(command.config, &error)) {
                 WriteAll(fd, "{\"ok\":false,\"error\":\""
                         + vcames::JsonEscape(error) + "\"}\n");
                 return;
             }
-            if (!engine->Start(command.config, &error)) {
-                vcames::DeactivateReplacementAdapter();
-                WriteAll(fd, "{\"ok\":false,\"error\":\""
-                        + vcames::JsonEscape(error) + "\"}\n");
-                return;
+            if (command.config.target != "external") {
+                const int frame_bus_fd = engine->DuplicateFrameBusFd(&error);
+                if (frame_bus_fd < 0 || !vcames::ActivateReplacementAdapter(
+                            command.config,
+                            frame_bus_fd,
+                            engine->FrameBusDescriptor(),
+                            &error)) {
+                    if (frame_bus_fd >= 0) {
+                        close(frame_bus_fd);
+                    }
+                    engine->Stop();
+                    WriteAll(fd, "{\"ok\":false,\"error\":\""
+                            + vcames::JsonEscape(error) + "\"}\n");
+                    return;
+                }
+                close(frame_bus_fd);
             }
             WriteAll(fd, engine->StatusJson() + "\n");
             return;

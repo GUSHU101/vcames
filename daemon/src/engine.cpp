@@ -26,12 +26,16 @@ bool Engine::Start(const Config& config, std::string* error) {
         return false;
     }
     Stop();
+    if (!frame_bus_.Open(SharedFrameBus::kDefaultSlotCapacity, error)) {
+        return false;
+    }
     {
         std::lock_guard lock(mutex_);
         config_ = config;
         status_ = RuntimeStatus{};
         status_.running = true;
         status_.source_connected = config.url == "push://local";
+        status_.frame_bus_ready = true;
         latest_frame_.reset();
         latest_generation_ = 0;
         stop_requested_.store(false, std::memory_order_relaxed);
@@ -64,7 +68,9 @@ void Engine::Stop() {
     status_.running = false;
     status_.source_connected = false;
     status_.sink_open = false;
+    status_.frame_bus_ready = false;
     latest_frame_.reset();
+    frame_bus_.Close();
 }
 
 bool Engine::PushFrame(std::vector<uint8_t>&& jpeg, std::string* error) {
@@ -99,6 +105,8 @@ std::string Engine::StatusJson() const {
          << ",\"source\":\"" << (config_.url == "push://local" ? "local" : "mjpeg") << "\""
          << ",\"connected\":" << (status_.source_connected ? "true" : "false")
          << ",\"camera_ready\":" << (status_.sink_open ? "true" : "false")
+         << ",\"frame_bus_ready\":" << (status_.frame_bus_ready ? "true" : "false")
+         << ",\"transport\":\"memfd-ring-v1\""
          << ",\"target\":\"" << JsonEscape(config_.target) << "\""
          << ",\"received\":" << status_.frames_received
          << ",\"written\":" << status_.frames_written
@@ -107,6 +115,14 @@ std::string Engine::StatusJson() const {
          << ",\"age_ms\":" << age_ms
          << ",\"error\":\"" << JsonEscape(status_.error) << "\"}";
     return json.str();
+}
+
+int Engine::DuplicateFrameBusFd(std::string* error) const {
+    return frame_bus_.DuplicateFd(error);
+}
+
+std::string Engine::FrameBusDescriptor() const {
+    return frame_bus_.Descriptor();
 }
 
 void Engine::SourceLoop() {
@@ -225,6 +241,7 @@ void Engine::WriterLoop() {
                 || now - last_frame_time > std::chrono::milliseconds(config_.stale_timeout_ms);
         if (stale && !config_.hold_last) {
             sink.Close();
+            frame_bus_.Invalidate();
             std::lock_guard lock(mutex_);
             status_.sink_open = false;
             next_write = now + frame_interval;
@@ -236,6 +253,33 @@ void Engine::WriterLoop() {
         }
 
         std::string sink_error;
+        const int64_t timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                now.time_since_epoch()).count();
+        if (!frame_bus_.PublishJpeg(
+                    processed_frame,
+                    config_.width,
+                    config_.height,
+                    timestamp_ns,
+                    timestamp_ns,
+                    &sink_error)) {
+            std::lock_guard lock(mutex_);
+            status_.frame_bus_ready = false;
+            status_.sink_open = false;
+            status_.error = std::move(sink_error);
+            next_write = now + frame_interval;
+            continue;
+        }
+        if (config_.target != "external") {
+            std::lock_guard lock(mutex_);
+            status_.frame_bus_ready = true;
+            status_.sink_open = true;
+            ++status_.frames_written;
+            next_write += frame_interval;
+            if (next_write < now - frame_interval) {
+                next_write = now + frame_interval;
+            }
+            continue;
+        }
         if (!sink.is_open()
                 && !sink.Open(
                         config_.device,

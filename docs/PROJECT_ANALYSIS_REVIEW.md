@@ -19,7 +19,7 @@
 
 文本中“CI 只编译 host parser、不构建 Android daemon”的判断针对旧提交。当前 CI 已用
 NDK 构建 arm64 `vcamesd`、生成并校验 Magisk ZIP，同时构建 system/root 两种 APK。1.2.0
-进一步校验 standalone Root APK 内确实包含可由应用交给 Magisk 的 bridge ZIP。
+进一步校验 standalone Root APK 内确实包含可由应用交给 KernelSU/Magisk 的 bridge ZIP。
 
 ## 仍然成立的工程限制
 
@@ -29,7 +29,7 @@ NDK 构建 arm64 `vcamesd`、生成并校验 Magisk ZIP，同时构建 system/ro
   模块签名或 `CONFIG_MODVERSIONS`。
 - stock 系统的 VINTF/Provider 启动时序可能早于 Magisk late_start；external 模式在某些
   构建上仍需要 custom boot/early-init。
-- 前后摄像头替换没有跨 Pixel 4–6、Android 13–15 的单一 ABI。每次 OTA 后必须重新构建、
+- 前后摄像头替换没有跨 Pixel 4–6、Android 11–15 的单一 ABI。每次 OTA 后必须重新构建、
   重新验证设备适配器。
 
 ## 本轮优化边界

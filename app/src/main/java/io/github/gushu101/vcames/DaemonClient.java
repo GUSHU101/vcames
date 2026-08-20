@@ -43,7 +43,7 @@ final class DaemonClient {
                 }
                 response.write(chunk, 0, count);
             }
-            String result = response.toString(StandardCharsets.UTF_8).trim();
+            String result = new String(response.toByteArray(), StandardCharsets.UTF_8).trim();
             if (result.contains("\"ok\":false")) {
                 throw new IOException("vcamesd rejected the request: " + result);
             }

@@ -31,7 +31,37 @@ bool WriteAll(int fd, const std::string& value) {
     return true;
 }
 
-bool Request(const std::string& request, std::string* response, std::string* error) {
+bool SendWithOptionalFd(int socket_fd, const std::string& request, int passed_fd) {
+    if (passed_fd < 0) {
+        return WriteAll(socket_fd, request);
+    }
+    iovec io{};
+    io.iov_base = const_cast<char*>(request.data());
+    io.iov_len = request.size();
+    char control[CMSG_SPACE(sizeof(int))]{};
+    msghdr message{};
+    message.msg_iov = &io;
+    message.msg_iovlen = 1;
+    message.msg_control = control;
+    message.msg_controllen = sizeof(control);
+    cmsghdr* header = CMSG_FIRSTHDR(&message);
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_RIGHTS;
+    header->cmsg_len = CMSG_LEN(sizeof(int));
+    std::memcpy(CMSG_DATA(header), &passed_fd, sizeof(passed_fd));
+    const ssize_t sent = sendmsg(socket_fd, &message, MSG_NOSIGNAL);
+    if (sent <= 0) {
+        return false;
+    }
+    return static_cast<size_t>(sent) == request.size()
+            || WriteAll(socket_fd, request.substr(static_cast<size_t>(sent)));
+}
+
+bool Request(
+        const std::string& request,
+        int passed_fd,
+        std::string* response,
+        std::string* error) {
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     address.sun_path[0] = '\0';
@@ -56,17 +86,24 @@ bool Request(const std::string& request, std::string* response, std::string* err
     if (connect(fd, reinterpret_cast<const sockaddr*>(&address), address_length) == 0) {
         ucred credentials{};
         socklen_t credential_size = sizeof(credentials);
+        bool trusted = false;
         if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials,
-                       &credential_size) != 0
-                || (credentials.uid != 0 && credentials.uid != 1000
-                    && credentials.uid != 1047)) {
+                       &credential_size) == 0) {
+#ifdef __ANDROID__
+            trusted = credentials.uid == 0 || credentials.uid == 1000
+                    || credentials.uid == 1047;
+#else
+            trusted = credentials.uid == getuid();
+#endif
+        }
+        if (!trusted) {
             if (error != nullptr) {
                 *error = "replacement adapter peer has an untrusted Android UID";
             }
             close(fd);
             return false;
         }
-        if (!WriteAll(fd, request)) {
+        if (!SendWithOptionalFd(fd, request, passed_fd)) {
             if (error != nullptr) {
                 *error = std::string("replacement adapter write failed: ")
                         + std::strerror(errno);
@@ -110,10 +147,20 @@ bool Request(const std::string& request, std::string* response, std::string* err
 
 }  // namespace
 
-bool ActivateReplacementAdapter(const Config& config, std::string* error) {
+bool ActivateReplacementAdapter(
+        const Config& config,
+        int frame_bus_fd,
+        const std::string& frame_bus_descriptor,
+        std::string* error) {
     if (config.target == "external") {
         DeactivateReplacementAdapter();
         return true;
+    }
+    if (frame_bus_fd < 0 || frame_bus_descriptor.empty()) {
+        if (error != nullptr) {
+            *error = "replacement mode requires a shared frame transport";
+        }
+        return false;
     }
     std::ostringstream request;
     request << "ACTIVATE\n"
@@ -121,13 +168,15 @@ bool ActivateReplacementAdapter(const Config& config, std::string* error) {
             << "device=" << config.device << '\n'
             << "width=" << config.width << '\n'
             << "height=" << config.height << '\n'
-            << "fps=" << config.fps << "\n.\n";
-    return Request(request.str(), nullptr, error);
+            << "fps=" << config.fps << '\n'
+            << frame_bus_descriptor
+            << ".\n";
+    return Request(request.str(), frame_bus_fd, nullptr, error);
 }
 
 void DeactivateReplacementAdapter() {
     std::string ignored;
-    Request("DEACTIVATE\n.\n", nullptr, &ignored);
+    Request("DEACTIVATE\n.\n", -1, nullptr, &ignored);
 }
 
 }  // namespace vcames

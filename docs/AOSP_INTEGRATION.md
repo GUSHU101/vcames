@@ -8,7 +8,7 @@ git clone --recurse-submodules https://github.com/GUSHU101/vcames \
 ```
 
 将 `aosp/product/vcames.mk` 加入产品继承，将 `aosp/BoardConfigVcames.mk` 加入设备
-`BoardConfig.mk`。产品 fragment 会安装应用、守护进程、Android 13–15 的 HIDL 2.4
+`BoardConfig.mk`。产品 fragment 会安装应用、守护进程、Android 11–15 分支匹配的 HIDL 2.4
 External Camera Provider、feature XML、VINTF fragment 和 Provider 配置。
 
 ## 2. 内核
@@ -66,13 +66,13 @@ boot/vendor_boot/vendor_dlkm。
 .\tools\adb\verify-vcames.ps1
 ```
 
-通过标准包括：API 33–35、SELinux enforcing、`vcamesd` domain 正确、video100 同时具备
+通过标准包括：API 30–35、SELinux enforcing、`vcamesd` domain 正确、video100 同时具备
 V4L2 output/capture 能力、`external/0` Provider 注册、CameraService 列出外置相机，
 且日志没有相关 SELinux denial。
 
 ## Android 15 说明
 
-Android 13 起 Camera HAL 推荐 AIDL，但 Android 13–15 仍保留 HIDL Provider 支持；本项目
+Android 13 起 Camera HAL 新开发使用 AIDL，但框架仍保留 HIDL Provider 支持；本项目
 为了一个产品 fragment 覆盖三代系统，使用 AOSP 的
 `android.hardware.camera.provider@2.4-external-service`。如果目标 ROM 已完全迁移到 AIDL
 External Provider，可在产品 fragment 中替换为该 ROM 的

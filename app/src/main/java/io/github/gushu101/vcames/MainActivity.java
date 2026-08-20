@@ -22,12 +22,15 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
     private static final long STATUS_INTERVAL_MS = 1000;
     private static final int PICK_VIDEO_REQUEST = 1001;
+    private static final int EXPORT_DIAGNOSTICS_REQUEST = 1002;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final DeploymentBridge deploymentBridge = DeploymentBridge.create();
@@ -54,6 +57,7 @@ public final class MainActivity extends Activity {
     private TextView localMediaView;
     private TextView deploymentView;
     private String localMediaUri = "";
+    private String pendingDiagnostics = "";
     private boolean polling;
 
     private final Runnable statusPoll = new Runnable() {
@@ -113,14 +117,14 @@ public final class MainActivity extends Activity {
         scroll.addView(root, matchWrap());
 
         TextView title = new TextView(this);
-        title.setText("VCamES · Pixel System Camera");
+        title.setText("VCamES 2.0 · System Camera");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(13, 27, 42));
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Android 13–15 · Camera Provider / V4L2 · 无 Xposed");
+        subtitle.setText("Pixel 4–6 · Android 11–15 · FrameBus / V4L2 · 无 Xposed");
         subtitle.setTextSize(14);
         subtitle.setTextColor(Color.DKGRAY);
         subtitle.setPadding(0, dp(4), 0, dp(16));
@@ -135,7 +139,8 @@ public final class MainActivity extends Activity {
         root.addView(statusView, matchWithBottom(16));
 
         deploymentView = new TextView(this);
-        deploymentView.setText("部署状态尚未检查。ROOT 版会在这里触发 Magisk 授权；系统版不会调用 su。");
+        deploymentView.setText("部署状态尚未检查。ROOT 版支持 KernelSU/Magisk 能力检测；"
+                + "系统版不会调用 su。");
         deploymentView.setTextSize(13);
         deploymentView.setTextColor(Color.rgb(45, 55, 72));
         root.addView(deploymentView, matchWithBottom(6));
@@ -144,6 +149,11 @@ public final class MainActivity extends Activity {
         deploy.setText(deploymentBridge.actionLabel());
         deploy.setOnClickListener(view -> authorizeAndDeploy());
         root.addView(deploy, matchWithBottom(14));
+
+        Button diagnostics = new Button(this);
+        diagnostics.setText("生成并导出兼容性诊断");
+        diagnostics.setOnClickListener(view -> exportDiagnostics());
+        root.addView(diagnostics, matchWithBottom(14));
 
         urlInput = addTextField(root, "HTTP MJPEG 地址", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_URI);
@@ -227,8 +237,8 @@ public final class MainActivity extends Activity {
         root.addView(actions, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("“外置相机”使用 AOSP external/0 Provider。前置/后置替换还要求当前系统"
-                + "指纹完全匹配的 Camera HAL 替换适配器；缺少或不匹配时 vcamesd 会拒绝启动，"
+        note.setText("“外置相机”使用 AOSP external/0 Provider。前置/后置通过共享 FrameBus"
+                + "向精确系统构建的 Camera HAL 适配器供帧；缺少或不匹配时 vcamesd 会拒绝启动，"
                 + "不会盲目 hook cameraserver。控制 APK 必须配合 ROM 集成或 Root Bridge。");
         note.setTextSize(13);
         note.setTextColor(Color.DKGRAY);
@@ -328,6 +338,23 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void exportDiagnostics() {
+        deploymentView.setText(R.string.diagnostics_collecting);
+        ioExecutor.execute(() -> {
+            pendingDiagnostics = "VCamES 2.0 compatibility report\n"
+                    + "generated_at_ms=" + System.currentTimeMillis() + "\n\n"
+                    + DeviceProfiler.collect(this) + "\n\n"
+                    + deploymentBridge.diagnostics(this) + "\n";
+            mainHandler.post(() -> {
+                Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("text/plain");
+                intent.putExtra(Intent.EXTRA_TITLE, "vcames-compatibility-report.txt");
+                startActivityForResult(intent, EXPORT_DIAGNOSTICS_REQUEST);
+            });
+        });
+    }
+
     private String selectedTarget() {
         switch (targetInput.getSelectedItemPosition()) {
             case 1:
@@ -357,11 +384,26 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != PICK_VIDEO_REQUEST || resultCode != RESULT_OK || data == null) {
+        if (resultCode != RESULT_OK || data == null) {
             return;
         }
         Uri uri = data.getData();
         if (uri == null) {
+            return;
+        }
+        if (requestCode == EXPORT_DIAGNOSTICS_REQUEST) {
+            try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
+                if (output == null) {
+                    throw new IOException("文档提供器没有返回输出流");
+                }
+                output.write(pendingDiagnostics.getBytes(StandardCharsets.UTF_8));
+                deploymentView.setText(R.string.diagnostics_exported);
+            } catch (IOException e) {
+                toast("诊断导出失败：" + e.getMessage());
+            }
+            return;
+        }
+        if (requestCode != PICK_VIDEO_REQUEST) {
             return;
         }
         try {
