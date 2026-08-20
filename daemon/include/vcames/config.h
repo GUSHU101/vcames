@@ -7,6 +7,7 @@ namespace vcames {
 struct Config {
     std::string url = "http://192.168.1.10:8888/live.mjpg";
     std::string device = "/dev/video100";
+    std::string target = "external";
     int width = 1280;
     int height = 720;
     int fps = 30;

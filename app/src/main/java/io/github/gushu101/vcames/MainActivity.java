@@ -30,6 +30,7 @@ public final class MainActivity extends Activity {
     private static final int PICK_VIDEO_REQUEST = 1001;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final DeploymentBridge deploymentBridge = DeploymentBridge.create();
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "vcames-ui-io");
         thread.setDaemon(true);
@@ -44,12 +45,14 @@ public final class MainActivity extends Activity {
     private EditText staleInput;
     private EditText qualityInput;
     private Spinner sourceInput;
+    private Spinner targetInput;
     private Spinner rotationInput;
     private CheckBox mirrorInput;
     private CheckBox holdLastInput;
     private CheckBox bootInput;
     private TextView statusView;
     private TextView localMediaView;
+    private TextView deploymentView;
     private String localMediaUri = "";
     private boolean polling;
 
@@ -131,6 +134,17 @@ public final class MainActivity extends Activity {
         statusView.setBackgroundColor(Color.rgb(13, 71, 102));
         root.addView(statusView, matchWithBottom(16));
 
+        deploymentView = new TextView(this);
+        deploymentView.setText("部署状态尚未检查。ROOT 版会在这里触发 Magisk 授权；系统版不会调用 su。");
+        deploymentView.setTextSize(13);
+        deploymentView.setTextColor(Color.rgb(45, 55, 72));
+        root.addView(deploymentView, matchWithBottom(6));
+
+        Button deploy = new Button(this);
+        deploy.setText(deploymentBridge.actionLabel());
+        deploy.setOnClickListener(view -> authorizeAndDeploy());
+        root.addView(deploy, matchWithBottom(14));
+
         urlInput = addTextField(root, "HTTP MJPEG 地址", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_URI);
         root.addView(fieldLabel("视频来源"), matchWrap());
@@ -140,6 +154,14 @@ public final class MainActivity extends Activity {
                 android.R.layout.simple_spinner_dropdown_item,
                 new String[]{"HTTP MJPEG", "本地视频（循环）"}));
         root.addView(sourceInput, matchWithBottom(6));
+
+        root.addView(fieldLabel("替换目标"), matchWrap());
+        targetInput = new Spinner(this);
+        targetInput.setAdapter(new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"外置相机（通用）", "前置摄像头", "后置摄像头", "前置 + 后置"}));
+        root.addView(targetInput, matchWithBottom(8));
 
         LinearLayout localMediaRow = horizontalRow();
         Button chooseMedia = new Button(this);
@@ -205,8 +227,9 @@ public final class MainActivity extends Activity {
         root.addView(actions, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("系统相机显示为 external camera。首次部署后请先确认 /dev/video100、"
-                + "external/0 Provider 和 vcamesd 均已启动；控制 APK 必须配合 ROM 集成或 Root Bridge。");
+        note.setText("“外置相机”使用 AOSP external/0 Provider。前置/后置替换还要求当前系统"
+                + "指纹完全匹配的 Camera HAL 替换适配器；缺少或不匹配时 vcamesd 会拒绝启动，"
+                + "不会盲目 hook cameraserver。控制 APK 必须配合 ROM 集成或 Root Bridge。");
         note.setTextSize(13);
         note.setTextColor(Color.DKGRAY);
         note.setPadding(0, dp(16), 0, 0);
@@ -224,6 +247,7 @@ public final class MainActivity extends Activity {
         staleInput.setText(Integer.toString(config.staleTimeoutMs));
         qualityInput.setText(Integer.toString(config.jpegQuality));
         sourceInput.setSelection(config.url.equals("push://local") ? 1 : 0);
+        targetInput.setSelection(targetPosition(config.target));
         rotationInput.setSelection(config.rotation / 90);
         mirrorInput.setChecked(config.mirror);
         holdLastInput.setChecked(config.holdLast);
@@ -275,6 +299,7 @@ public final class MainActivity extends Activity {
                         ? "push://local"
                         : urlInput.getText().toString().trim(),
                 deviceInput.getText().toString().trim(),
+                selectedTarget(),
                 parseInt(widthInput, "宽度"),
                 parseInt(heightInput, "高度"),
                 parseInt(fpsInput, "FPS"),
@@ -293,6 +318,40 @@ public final class MainActivity extends Activity {
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         startActivityForResult(intent, PICK_VIDEO_REQUEST);
+    }
+
+    private void authorizeAndDeploy() {
+        deploymentView.setText("正在请求授权并检查部署…");
+        ioExecutor.execute(() -> {
+            String result = deploymentBridge.authorizeAndDeploy(this);
+            mainHandler.post(() -> deploymentView.setText(result));
+        });
+    }
+
+    private String selectedTarget() {
+        switch (targetInput.getSelectedItemPosition()) {
+            case 1:
+                return "front";
+            case 2:
+                return "back";
+            case 3:
+                return "both";
+            default:
+                return "external";
+        }
+    }
+
+    private static int targetPosition(String target) {
+        if (target.equals("front")) {
+            return 1;
+        }
+        if (target.equals("back")) {
+            return 2;
+        }
+        if (target.equals("both")) {
+            return 3;
+        }
+        return 0;
     }
 
     @Override

@@ -65,6 +65,10 @@ bool Config::Validate(std::string* error) const {
             })) {
         return fail("device must end with a numeric V4L2 index");
     }
+    if (target != "external" && target != "front" && target != "back"
+            && target != "both") {
+        return fail("target must be external, front, back, or both");
+    }
     if (width < 160 || width > 3840 || height < 120 || height > 2160) {
         return fail("resolution is outside 160x120 through 3840x2160");
     }
@@ -169,6 +173,7 @@ bool ParseCommand(const std::string& request, Command* command, std::string* err
     };
     string_option("url", &config.url);
     string_option("device", &config.device);
+    string_option("target", &config.target);
 
     auto int_option = [&values, error](const char* key, int* target) {
         const auto it = values.find(key);
@@ -211,7 +216,8 @@ bool ParseCommand(const std::string& request, Command* command, std::string* err
     }
 
     static const std::unordered_map<std::string, bool> kKnownOptions = {
-        {"url", true}, {"device", true}, {"width", true}, {"height", true},
+        {"url", true}, {"device", true}, {"target", true},
+        {"width", true}, {"height", true},
         {"fps", true}, {"rotation", true}, {"mirror", true},
         {"hold_last", true}, {"stale_timeout_ms", true}, {"jpeg_quality", true},
     };

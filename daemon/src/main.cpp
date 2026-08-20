@@ -1,6 +1,7 @@
 #include "vcames/config.h"
 #include "vcames/engine.h"
 #include "vcames/image_transform.h"
+#include "vcames/replacement_adapter.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -144,7 +145,9 @@ bool ReadExact(int fd, void* output, size_t size) {
             continue;
         }
         if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            continue;
+            // SO_RCVTIMEO expired. Abandon an incomplete frame so a stalled
+            // producer cannot monopolize the single frame endpoint forever.
+            return false;
         }
         return false;
     }
@@ -198,7 +201,13 @@ void HandleControlClient(int fd, vcames::Engine* engine) {
     }
     switch (command.type) {
         case vcames::CommandType::kStart:
+            if (!vcames::ActivateReplacementAdapter(command.config, &error)) {
+                WriteAll(fd, "{\"ok\":false,\"error\":\""
+                        + vcames::JsonEscape(error) + "\"}\n");
+                return;
+            }
             if (!engine->Start(command.config, &error)) {
+                vcames::DeactivateReplacementAdapter();
                 WriteAll(fd, "{\"ok\":false,\"error\":\""
                         + vcames::JsonEscape(error) + "\"}\n");
                 return;
@@ -207,6 +216,7 @@ void HandleControlClient(int fd, vcames::Engine* engine) {
             return;
         case vcames::CommandType::kStop:
             engine->Stop();
+            vcames::DeactivateReplacementAdapter();
             WriteAll(fd, engine->StatusJson() + "\n");
             return;
         case vcames::CommandType::kStatus:
@@ -342,6 +352,7 @@ int main(int argc, char** argv) {
         frame_server.join();
     }
     engine.Stop();
+    vcames::DeactivateReplacementAdapter();
     const int control = g_control_listener.exchange(-1, std::memory_order_relaxed);
     if (control >= 0) {
         close(control);

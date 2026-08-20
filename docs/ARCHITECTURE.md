@@ -1,12 +1,14 @@
 # 架构与安全边界
 
-## 为什么使用 External Camera Provider
+## External 与前后替换
 
 Android 13–15 的 CameraService 只能通过相机 HAL 获得系统相机。VCamES 选择 AOSP 已有的
 External Camera Provider：它监听 `/dev/video*`，把符合 V4L2 capture 规范的节点注册为
 Camera HAL 3.x 外置相机。v4l2loopback 同时提供 output 端给 `vcamesd`、capture 端给 Provider。
 
 这条路径不会修改应用进程，不依赖 Xposed，也不使用参考 APK 中的私有符号 hook。
+`front/back/both` 由一个设备构建专用的 Camera HAL adapter 保留原 camera ID 并替换输出
+buffer；通用 daemon 只通过受限 socket 激活它，不持有 cameraserver 私有 ABI。
 
 ## 组件
 
@@ -16,17 +18,19 @@ Camera HAL 3.x 外置相机。v4l2loopback 同时提供 output 端给 `vcamesd`�
 | `vcamesd` | `system_ext/bin`、独立 SELinux domain | HTTP MJPEG、变换、限流、V4L2 写入 |
 | v4l2loopback | kernel/vendor_dlkm | `/dev/video100` 环形帧设备 |
 | External Provider | vendor HAL | V4L2 capture → Camera HAL 3.6 |
+| Camera adapter（可选） | vendor HAL/精确 Root payload | 原前后 camera ID → V4L2 虚拟帧 |
 
 ## 控制协议
 
-两个 Linux abstract `AF_UNIX` socket：`vcamesd` 接收文本命令，`vcamesd_frames` 接收
+三个 Linux abstract `AF_UNIX` socket：`vcamesd` 接收文本命令，`vcamesd_frames` 接收
 `VCF1` 魔数和 big-endian 长度前缀 JPEG。服务端使用 `SO_PEERCRED` 拒绝 UID 0/1000
-之外的连接；SELinux 仅允许 `system_app` 连接 `vcamesd` domain。
+之外的连接；SELinux 仅允许 `system_app` 连接 `vcamesd` domain。可选
+`vcames-camera-adapter` 接收 ACTIVATE/DEACTIVATE，只应接受 UID 0。
 
 ## 延迟和故障处理
 
 来源线程只保留最新帧，写入线程不会回放积压；超出的 generation 计为 dropped。
-HTTP 断线采用 1–30 秒指数退避。`hold_last=false` 时超过阈值关闭 sink；开启时以目标
+HTTP 断线采用 1–30 秒指数退避，成功连接后重置为 1 秒。`hold_last=false` 时超过阈值关闭 sink；开启时以目标
 FPS 重复最后一帧。单帧上限 16 MiB，分辨率上限 3840×2160。
 
 ## 启动顺序

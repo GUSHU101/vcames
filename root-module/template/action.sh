@@ -20,7 +20,16 @@ ls -lZ /dev/video100 2>/dev/null || echo "  不存在"
 cat /sys/class/video4linux/video100/name 2>/dev/null || true
 echo
 echo "External Camera Provider:"
-lshal 2>/dev/null | grep 'camera.provider.*external/0' || echo "  external/0 未注册"
+provider="$(lshal 2>/dev/null | grep 'camera.provider.*external/0')"
+[ -n "$provider" ] || provider="$(service list 2>/dev/null | grep 'camera.provider.*external/0')"
+[ -z "$provider" ] && echo "  external/0 未注册" || echo "$provider"
+echo
+echo "Front/back replacement adapter:"
+if [ -x "${0%/*}/bin/vcames-camera-adapter" ]; then
+  echo "  已安装（精确系统指纹校验）"
+else
+  echo "  未安装；仅可使用 external/0"
+fi
 echo
 echo "最近日志:"
 tail -n 30 "$STATE_DIR/root-service.log" 2>/dev/null || echo "  无日志"

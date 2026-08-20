@@ -9,7 +9,7 @@ Root Bridge 支持仍保留 Google system/vendor 分区内容、通过 Magisk �
 
 1. `/dev/video100` 来自与当前内核完全匹配的 v4l2loopback；
 2. `android.hardware.camera.provider ... external/0` 已在 hwservicemanager 注册；
-3. Root 控制 APK 以普通应用 UID 安装；
+3. Root 控制 APK 以普通应用 UID 安装，并由 Magisk 明确授权；
 4. SELinux 保持 Enforcing，模块的最小规则允许该 App domain 连接 Magisk daemon；
 5. `vcamesd` 写入 MJPEG 后，CameraService 能枚举外置相机。
 
@@ -29,12 +29,15 @@ hwservicemanager 重新读取。
 
 | 状态 | 含义 | 处理 |
 |---|---|---|
-| `READY` | loopback 与 external/0 已存在 | 可构建不含额外 payload 的模块 |
+| `READY_EXTERNAL_ONLY` | loopback 与 external/0 已存在 | 可用 external 模式 |
+| `READY_REPLACEMENT_ONLY` | 精确构建适配器已启动 | 可用 front/back/both 模式 |
+| `READY_EXTERNAL_AND_REPLACEMENT` | 两条链路均就绪 | 所有目标模式可用 |
 | `NEEDS_V4L2LOOPBACK` | 没有 `/dev/video100` | 提供精确匹配 `.ko` 或 custom boot kernel |
 | `NEEDS_COMPATIBLE_KERNEL_MODULE` | `insmod` 被拒绝 | 核对 dmesg 中签名、KMI、vermagic、未知符号错误 |
 | `NEEDS_EXTERNAL_CAMERA_PROVIDER` | external/0 未注册 | 提供同 API/vendor Provider，并解决早期 VINTF 声明 |
 | `NEEDS_CONTROLLER_APK` | 5 分钟内未找到普通 UID 控制端 | 手动安装 ZIP 旁的 Root controller APK 后重启 |
 | `DAEMON_START_FAILED` | Root daemon 未启动 | 查看 `/data/adb/vcames/root-service.log` |
+| `REPLACEMENT_ADAPTER_START_FAILED` | 精确构建适配器未启动 | 禁用模块并检查适配器日志/ABI |
 
 ## 2. 准备 payload
 
@@ -82,10 +85,26 @@ VCAMES_PROVIDER_BINARY=/path/external-provider \
 输出位于 `out/root/`：Magisk ZIP 和可手动安装的 Root controller APK。正式分发时应给
 Root APK 使用稳定的自有签名；CI debug APK 的签名不保证跨构建一致。
 
+构建器还输出 `VCamES-Root-standalone.apk`。它内置不含 controller 的同一 Bridge；安装 APK
+后点击“授权 ROOT 并部署”，在 Magisk 弹窗中允许，应用会执行 `magisk --install-module`
+并提示重启。没有内置匹配 `.ko`/Provider/adapter 的普通 Gradle APK 只负责授权和诊断。
+
+前后摄像头替换需先生成精确兼容清单并传入适配器：
+
+```powershell
+.\tools\adb\capture-camera-compatibility.ps1
+.\tools\root\build-root-module.ps1 -Api 34 `
+  -ReplacementAdapter C:\build\vcames-camera-adapter `
+  -CompatibilityManifest .\out\camera-compatibility.properties
+```
+
+完整协议见 [前后摄像头替换](FRONT_BACK_REPLACEMENT.md)。
+
 ## 4. 安装与恢复
 
-在 Magisk 中安装 ZIP 并重启。安装脚本会尝试安装普通 UID 控制 APK，不会卸载签名冲突
-的旧版本。重启后在模块页面执行 Action，确认状态 `READY`，再打开 VCamES Root。
+可以直接安装 standalone APK 并在应用内授权部署，也可以在 Magisk 中安装 ZIP。安装脚本
+不会卸载签名冲突的旧版本。重启后在模块页面执行 Action，确认对应 `READY_*` 状态，再打开
+VCamES Root。
 
 出现启动问题时，可从可用的 Root ADB/救援环境禁用模块：
 

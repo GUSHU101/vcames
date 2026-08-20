@@ -7,13 +7,16 @@ param(
     [string]$ControllerApk = '',
     [string]$KernelModule = '',
     [string]$ProviderBinary = '',
+    [string]$ReplacementAdapter = '',
+    [string]$CompatibilityManifest = '',
     [string]$OutputPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $outRoot = Join-Path $repoRoot 'out\root'
-New-Item -ItemType Directory -Force -Path $outRoot | Out-Null
+$generatedAssets = Join-Path $repoRoot 'app\build\generated\rootBridgeAssets'
+New-Item -ItemType Directory -Force -Path $outRoot, $generatedAssets | Out-Null
 
 function Resolve-ExistingFile([string]$Path, [string]$Label) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
@@ -24,20 +27,9 @@ function Resolve-ExistingFile([string]$Path, [string]$Label) {
     return $resolved.Path
 }
 
-if ([string]::IsNullOrWhiteSpace($ControllerApk)) {
-    & (Join-Path $repoRoot 'gradlew.bat') ':app:assembleRootDebug'
-    if ($LASTEXITCODE -ne 0) { throw 'Root 控制 APK 构建失败。' }
-    $ControllerApk = Join-Path $repoRoot 'app\build\outputs\apk\root\debug\app-root-debug.apk'
-}
-$ControllerApk = Resolve-ExistingFile $ControllerApk 'Controller APK'
-
 if ([string]::IsNullOrWhiteSpace($DaemonBinary)) {
-    if ([string]::IsNullOrWhiteSpace($NdkPath)) {
-        $NdkPath = $env:ANDROID_NDK_HOME
-    }
-    if ([string]::IsNullOrWhiteSpace($NdkPath)) {
-        $NdkPath = $env:ANDROID_NDK_ROOT
-    }
+    if ([string]::IsNullOrWhiteSpace($NdkPath)) { $NdkPath = $env:ANDROID_NDK_HOME }
+    if ([string]::IsNullOrWhiteSpace($NdkPath)) { $NdkPath = $env:ANDROID_NDK_ROOT }
     if ([string]::IsNullOrWhiteSpace($NdkPath) -and $env:ANDROID_HOME) {
         $ndkRoot = Join-Path $env:ANDROID_HOME 'ndk'
         if (Test-Path -LiteralPath $ndkRoot) {
@@ -79,9 +71,18 @@ if ([string]::IsNullOrWhiteSpace($DaemonBinary)) {
     if ($LASTEXITCODE -ne 0) { throw 'vcamesd Android 构建失败。' }
     $DaemonBinary = Join-Path $buildDir 'vcamesd'
 }
+
 $DaemonBinary = Resolve-ExistingFile $DaemonBinary 'vcamesd'
 $KernelModule = Resolve-ExistingFile $KernelModule 'v4l2loopback module'
 $ProviderBinary = Resolve-ExistingFile $ProviderBinary 'External Camera Provider'
+$ReplacementAdapter = Resolve-ExistingFile $ReplacementAdapter 'Camera replacement adapter'
+$CompatibilityManifest = Resolve-ExistingFile $CompatibilityManifest 'Compatibility manifest'
+if ($ReplacementAdapter -and -not $CompatibilityManifest) {
+    throw '打包前后摄像头替换适配器时必须提供 -CompatibilityManifest。'
+}
+if ($CompatibilityManifest -and -not $ReplacementAdapter) {
+    throw '-CompatibilityManifest 只能与 -ReplacementAdapter 一起使用。'
+}
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $outRoot "VCamES-Root-API$Api.zip"
@@ -89,6 +90,10 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 $outputFull = [IO.Path]::GetFullPath($OutputPath)
 $outputDirectory = Split-Path -Parent $outputFull
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+$standaloneOutput = Join-Path $outputDirectory 'VCamES-Root-standalone.apk'
+if (Test-Path -LiteralPath $standaloneOutput) {
+    Remove-Item -LiteralPath $standaloneOutput -Force
+}
 
 $stage = Join-Path $outRoot ("stage-{0}" -f [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage | Out-Null
@@ -97,7 +102,6 @@ try {
         -Destination $stage -Recurse -Force
     New-Item -ItemType Directory -Force -Path (Join-Path $stage 'bin') | Out-Null
     Copy-Item -LiteralPath $DaemonBinary -Destination (Join-Path $stage 'bin\vcamesd')
-    Copy-Item -LiteralPath $ControllerApk -Destination (Join-Path $stage 'controller.apk')
 
     $vendorEtc = Join-Path $stage 'system\vendor\etc'
     New-Item -ItemType Directory -Force -Path (Join-Path $vendorEtc 'vintf\manifest') | Out-Null
@@ -114,10 +118,35 @@ try {
         Copy-Item -LiteralPath $ProviderBinary `
             -Destination (Join-Path $stage 'bin\external-camera-provider')
     }
+    if ($ReplacementAdapter) {
+        Copy-Item -LiteralPath $ReplacementAdapter `
+            -Destination (Join-Path $stage 'bin\vcames-camera-adapter')
+        Copy-Item -LiteralPath $CompatibilityManifest `
+            -Destination (Join-Path $stage 'compatibility.properties')
+    }
+
+    # Create a controller-free module first and embed it into the Root flavor.
+    # The already installed app is the controller for this installation path.
+    $embeddedModule = Join-Path $generatedAssets 'vcames-root-bridge.zip'
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $embeddedModule -Force
+
+    $builtStandalone = $false
+    if ([string]::IsNullOrWhiteSpace($ControllerApk)) {
+        & (Join-Path $repoRoot 'gradlew.bat') ':app:assembleRootDebug'
+        if ($LASTEXITCODE -ne 0) { throw 'Root standalone APK 构建失败。' }
+        $ControllerApk = Join-Path $repoRoot 'app\build\outputs\apk\root\debug\app-root-debug.apk'
+        $builtStandalone = $true
+    }
+    $ControllerApk = Resolve-ExistingFile $ControllerApk 'Controller APK'
+    Copy-Item -LiteralPath $ControllerApk -Destination (Join-Path $stage 'controller.apk')
 
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $outputFull -Force
     Copy-Item -LiteralPath $ControllerApk `
         -Destination (Join-Path $outputDirectory 'VCamES-Root-controller.apk') -Force
+    if ($builtStandalone) {
+        Copy-Item -LiteralPath $ControllerApk `
+            -Destination $standaloneOutput -Force
+    }
 } finally {
     $resolvedStage = [IO.Path]::GetFullPath($stage)
     $resolvedOutRoot = [IO.Path]::GetFullPath($outRoot) + [IO.Path]::DirectorySeparatorChar
@@ -129,5 +158,9 @@ try {
 
 Write-Host "Magisk 模块：$outputFull"
 Write-Host "控制 APK：$(Join-Path $outputDirectory 'VCamES-Root-controller.apk')"
+if (Test-Path -LiteralPath $standaloneOutput) {
+    Write-Host "一体化 Root APK：$standaloneOutput"
+}
 if (-not $KernelModule) { Write-Warning '未打包 v4l2loopback.ko；设备必须已由兼容内核提供 /dev/video100。' }
-if (-not $ProviderBinary) { Write-Warning '未打包 Provider；设备必须已有可启动的 HIDL external provider。' }
+if (-not $ProviderBinary) { Write-Warning '未打包 Provider；external 模式要求设备已有可启动的 external provider。' }
+if (-not $ReplacementAdapter) { Write-Warning '未打包精确系统构建适配器；该 APK 只能使用 external 模式。' }

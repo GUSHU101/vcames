@@ -13,6 +13,7 @@ if(ANDROID)
         src/image_transform.cpp
         src/main.cpp
         src/mjpeg_parser.cpp
+        src/replacement_adapter.cpp
         src/v4l2_sink.cpp
     )
     target_include_directories(vcamesd PRIVATE include third_party/stb)
@@ -29,6 +30,12 @@ else()
         target_compile_options(vcames_parser PRIVATE /W4 /WX /permissive-)
     else()
         target_compile_options(vcames_parser PRIVATE -Wall -Wextra -Werror)
+    endif()
+
+    if(UNIX)
+        add_library(vcames_adapter STATIC src/replacement_adapter.cpp)
+        target_include_directories(vcames_adapter PRIVATE include)
+        target_compile_options(vcames_adapter PRIVATE -Wall -Wextra -Werror)
     endif()
 
     enable_testing()

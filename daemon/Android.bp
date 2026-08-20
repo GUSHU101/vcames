@@ -13,6 +13,7 @@ cc_binary {
         "src/image_transform.cpp",
         "src/main.cpp",
         "src/mjpeg_parser.cpp",
+        "src/replacement_adapter.cpp",
         "src/v4l2_sink.cpp",
     ],
     local_include_dirs: [

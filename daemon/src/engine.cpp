@@ -99,6 +99,7 @@ std::string Engine::StatusJson() const {
          << ",\"source\":\"" << (config_.url == "push://local" ? "local" : "mjpeg") << "\""
          << ",\"connected\":" << (status_.source_connected ? "true" : "false")
          << ",\"camera_ready\":" << (status_.sink_open ? "true" : "false")
+         << ",\"target\":\"" << JsonEscape(config_.target) << "\""
          << ",\"received\":" << status_.frames_received
          << ",\"written\":" << status_.frames_written
          << ",\"dropped\":" << status_.frames_dropped
@@ -113,11 +114,13 @@ void Engine::SourceLoop() {
     int backoff_seconds = 1;
     while (!stop_requested_.load(std::memory_order_relaxed)) {
         std::string stream_error;
+        bool connected_once = false;
         source.Stream(
                 config_.url,
                 stop_requested_,
                 [this](std::vector<uint8_t>&& jpeg) { PublishFrame(std::move(jpeg)); },
-                [this]() {
+                [this, &connected_once]() {
+                    connected_once = true;
                     std::lock_guard lock(mutex_);
                     status_.source_connected = true;
                     status_.error.clear();
@@ -125,6 +128,11 @@ void Engine::SourceLoop() {
                 &stream_error);
         if (stop_requested_.load(std::memory_order_relaxed)) {
             break;
+        }
+        // A source that was healthy should get a fast first reconnect. Without
+        // this reset, an old outage leaves later reconnects at the 30 s ceiling.
+        if (connected_once) {
+            backoff_seconds = 1;
         }
         {
             std::lock_guard lock(mutex_);
@@ -151,12 +159,27 @@ void Engine::WriterLoop() {
         std::chrono::steady_clock::time_point last_frame_time;
         {
             std::unique_lock lock(mutex_);
-            condition_.wait_until(lock, next_write, [this, consumed_generation] {
+            condition_.wait_until(lock, next_write,
+                                  [this, consumed_generation, &processed_frame] {
                 return stop_requested_.load(std::memory_order_relaxed)
-                        || latest_generation_ != consumed_generation;
+                        || (processed_frame.empty()
+                            && latest_generation_ != consumed_generation);
             });
             if (stop_requested_.load(std::memory_order_relaxed)) {
                 break;
+            }
+
+            // A newly published frame can wake an idle writer before its next
+            // scheduled tick. Keep the configured FPS authoritative and take
+            // the newest snapshot only when that tick is actually due.
+            const auto before_tick = std::chrono::steady_clock::now();
+            if (before_tick < next_write) {
+                condition_.wait_until(lock, next_write, [this] {
+                    return stop_requested_.load(std::memory_order_relaxed);
+                });
+                if (stop_requested_.load(std::memory_order_relaxed)) {
+                    break;
+                }
             }
             source_frame = latest_frame_;
             generation = latest_generation_;

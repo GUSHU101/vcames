@@ -5,6 +5,16 @@ STATE_DIR="/data/adb/vcames"
 LOG_FILE="$STATE_DIR/root-service.log"
 STATUS_FILE="$STATE_DIR/status.txt"
 PACKAGE="io.github.gushu101.vcames"
+adapter_pid=""
+daemon_pid=""
+provider_pid=""
+
+cleanup() {
+  [ -z "$daemon_pid" ] || kill "$daemon_pid" 2>/dev/null
+  [ -z "$adapter_pid" ] || kill "$adapter_pid" 2>/dev/null
+  [ -z "$provider_pid" ] || kill "$provider_pid" 2>/dev/null
+}
+trap cleanup EXIT
 
 mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
@@ -20,7 +30,8 @@ write_status() {
 }
 
 provider_ready() {
-  lshal 2>/dev/null | grep -q 'camera.provider.*external/0'
+  lshal 2>/dev/null | grep -q 'camera.provider.*external/0' ||
+    service list 2>/dev/null | grep -q 'camera.provider.*external/0'
 }
 
 module_load_failed=false
@@ -72,6 +83,19 @@ if [ "$app_uid" -lt 10000 ] || [ "$app_uid" -gt 2000000 ]; then
 fi
 
 echo "controller_uid=$app_uid"
+
+if [ -x "$MODDIR/bin/vcames-camera-adapter" ]; then
+  echo "starting fingerprint-verified front/back camera adapter"
+  "$MODDIR/bin/vcames-camera-adapter" \
+    --serve --socket vcames-camera-adapter --frame-device /dev/video100 &
+  adapter_pid=$!
+  sleep 2
+  if ! kill -0 "$adapter_pid" 2>/dev/null; then
+    write_status "REPLACEMENT_ADAPTER_START_FAILED"
+    exit 0
+  fi
+fi
+
 "$MODDIR/bin/vcamesd" --allowed-uid "$app_uid" &
 daemon_pid=$!
 sleep 2
@@ -98,15 +122,23 @@ if ! provider_ready; then
     done
     if ! provider_ready; then
       kill "$provider_pid" 2>/dev/null
+      provider_pid=""
     fi
   fi
 fi
 
-if ! provider_ready; then
+if ! provider_ready && [ -z "$adapter_pid" ]; then
   write_status "NEEDS_EXTERNAL_CAMERA_PROVIDER"
   echo "external/0 registration failed; the stock VINTF cache or matching provider is unavailable"
+  kill "$daemon_pid" 2>/dev/null
   exit 0
 fi
 
-write_status "READY"
+if [ -n "$adapter_pid" ] && provider_ready; then
+  write_status "READY_EXTERNAL_AND_REPLACEMENT"
+elif [ -n "$adapter_pid" ]; then
+  write_status "READY_REPLACEMENT_ONLY"
+else
+  write_status "READY_EXTERNAL_ONLY"
+fi
 wait "$daemon_pid"

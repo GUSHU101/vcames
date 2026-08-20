@@ -2,11 +2,12 @@
 
 VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 的系统级虚拟相机，支持定制 ROM
 原生集成，以及满足内核/Provider 前提的已 Root 原厂系统。
-它不使用 Xposed，也不向目标应用注入代码。视频帧由系统守护进程写入
-`/dev/video100`，再由 AOSP External Camera Provider 通过 Camera2/CameraX 暴露给应用。
+它不使用 Xposed，也不向目标应用注入代码。通用模式由系统守护进程写入
+`/dev/video100`，再由 AOSP External Camera Provider 通过 Camera2/CameraX 暴露；前置、
+后置或双摄替换则要求与单一 Pixel OTA 指纹完全匹配的 Camera HAL 适配器。
 
-> 这不是靠一个 APK 就能实现的相机替换。定制 ROM 需完整 AOSP 集成；Root 原厂模式至少
-> 需要兼容的内核 loopback 与已注册的 External Camera Provider，Root 权限本身不等于兼容。
+> standalone Root APK 可以申请 Magisk 授权并安装内置 Bridge，但它不能凭空生成与当前
+> 内核/Camera HAL 匹配的二进制。构建 APK 时仍须提供目标原厂构建所需的 payload。
 
 ## 已实现
 
@@ -19,7 +20,9 @@ VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 的系统级虚拟相机，
 - Pixel 4/4a/5/5a（4.14/4.19）和 Pixel 6/6 Pro/6a（5.10 GKI）的内核接入说明。
 - Windows FFmpeg MJPEG 发送脚本、ADB 设备验收脚本、Gradle/CMake 测试和 CI。
 - Root Bridge：普通签名 APK、受 UID 限制的 Root 守护进程、Magisk 模块模板、
-  v4l2loopback/External Provider 可选 payload 和原厂兼容性预检。
+  应用内 ROOT 授权/模块安装、standalone APK、v4l2loopback/Provider 可选 payload。
+- `external/front/back/both` 目标选择；前后替换使用独立适配器 socket，并在安装时校验
+  设备、API、完整 fingerprint 和 cameraserver 的 SHA-256。
 
 ## 数据路径
 
@@ -30,8 +33,10 @@ VCamES 是面向 Pixel 4–Pixel 6、Android 13–15 的系统级虚拟相机，
                  │ JPEG
           /dev/video100 (V4L2)
                  │
-      AOSP External Camera Provider
-                 │ Camera HAL 3.6
+       ┌─────────┴─────────┐
+ AOSP External Provider   精确构建 Camera HAL adapter
+       │ external ID       │ 原 front/back ID
+       └─────────┬─────────┘
         CameraService → Camera2/CameraX 应用
 ```
 
@@ -86,6 +91,10 @@ m VCamES vcamesd android.hardware.camera.provider@2.4-external-service
   -ProviderBinary C:\aosp-out\android.hardware.camera.provider@2.4-external-service
 ```
 
+构建器同时生成 `VCamES-Root-standalone.apk`。安装后点击“授权 ROOT 并部署”，应用会把内置
+Bridge 交给 Magisk，完成后重启。前后摄像头模式还需传入 `-ReplacementAdapter` 和
+`-CompatibilityManifest`，详见 [前后摄像头替换](docs/FRONT_BACK_REPLACEMENT.md)。
+
 Root 方案保持 SELinux enforcing，不使用 Zygisk/Xposed。详细前提和失败状态见
 [原厂 Root 部署](docs/ROOT_STOCK.md)。
 
@@ -100,10 +109,10 @@ Root 方案保持 SELinux enforcing，不使用 Zygisk/Xposed。详细前提和�
 
 ## 重要边界
 
-- 系统会把它作为一枚 **external camera** 暴露。遵循 Android API 的应用通常可见；
+- 通用模式会把它作为一枚 **external camera** 暴露。遵循 Android API 的应用通常可见；
   主动拒绝外置相机、只接受固定前/后物理 ID，或带企业安全策略的应用可能不会使用它。
-- 本项目不替换 Pixel 专有相机 HAL 内的物理前/后摄像头 ID。那需要按每个 Pixel vendor
-  camera HAL 单独维护代理层，无法作为 Android 13–15 的通用实现。
+- UI 和 daemon 已支持前置/后置/双摄目标，但仓库不包含跨构建通用注入器。只有在打包了
+  对当前 Pixel OTA 精确编译并签名验证的适配器时，这些模式才会启动。
 - 不包含身份验证绕过、活体检测规避、反检测或静默录制功能。请只在获得授权的测试、
   演示、直播和隐私保护场景使用，并让参与者知晓视频源。
 - 解锁 bootloader、刷写系统/内核会清除数据且存在无法启动风险。保留原厂 boot 镜像和
@@ -113,7 +122,8 @@ Root 方案保持 SELinux enforcing，不使用 Zygisk/Xposed。详细前提和�
 
 架构和 Windows MJPEG 兼容性参考了同作者的
 [VCamLab-2.0](https://github.com/GUSHU101/VCamLab-2.0)。参考 APK 仅做静态互操作分析；
-没有复制其私有二进制、资源或注入实现，详见 [参考 APK 说明](docs/REFERENCE_APK.md)。
+没有复制其私有二进制、资源或注入实现，详见 [参考 APK 深度分析](docs/REFERENCE_APK.md)
+和 [`项目分析.txt` 复核](docs/PROJECT_ANALYSIS_REVIEW.md)。
 
 VCamES 自有代码采用 Apache-2.0。`stb` 和可选 `v4l2loopback` 子模块按各自许可证发布，
 详见 [NOTICE](NOTICE)。

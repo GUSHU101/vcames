@@ -10,6 +10,7 @@ final class VCamConfig {
 
     final String url;
     final String device;
+    final String target;
     final int width;
     final int height;
     final int fps;
@@ -23,6 +24,7 @@ final class VCamConfig {
     VCamConfig(
             String url,
             String device,
+            String target,
             int width,
             int height,
             int fps,
@@ -34,6 +36,7 @@ final class VCamConfig {
             boolean startOnBoot) {
         this.url = url;
         this.device = device;
+        this.target = normalizeTarget(target);
         this.width = width;
         this.height = height;
         this.fps = fps;
@@ -50,6 +53,7 @@ final class VCamConfig {
         return new VCamConfig(
                 p.getString("url", "http://192.168.1.10:8888/live.mjpg"),
                 p.getString("device", "/dev/video100"),
+                p.getString("target", "external"),
                 p.getInt("width", 1280),
                 p.getInt("height", 720),
                 p.getInt("fps", 30),
@@ -78,6 +82,7 @@ final class VCamConfig {
                 .edit()
                 .putString("url", url)
                 .putString("device", device)
+                .putString("target", target)
                 .putInt("width", width)
                 .putInt("height", height)
                 .putInt("fps", fps)
@@ -94,10 +99,11 @@ final class VCamConfig {
         validate();
         return String.format(
                 Locale.US,
-                "START\nurl=%s\ndevice=%s\nwidth=%d\nheight=%d\nfps=%d\nrotation=%d\n"
+                "START\nurl=%s\ndevice=%s\ntarget=%s\nwidth=%d\nheight=%d\nfps=%d\nrotation=%d\n"
                         + "mirror=%d\nhold_last=%d\nstale_timeout_ms=%d\njpeg_quality=%d\n.\n",
                 url,
                 device,
+                target,
                 width,
                 height,
                 fps,
@@ -118,6 +124,10 @@ final class VCamConfig {
         if (!device.matches("/dev/video[0-9]+")) {
             throw new IllegalArgumentException("设备路径应类似 /dev/video100");
         }
+        if (!target.equals("external") && !target.equals("front")
+                && !target.equals("back") && !target.equals("both")) {
+            throw new IllegalArgumentException("摄像头替换目标无效");
+        }
         if (width < 160 || width > 3840 || height < 120 || height > 2160) {
             throw new IllegalArgumentException("分辨率超出 160×120 到 3840×2160");
         }
@@ -137,5 +147,10 @@ final class VCamConfig {
 
     private static int normalizeRotation(int rotation) {
         return rotation == 90 || rotation == 180 || rotation == 270 ? rotation : 0;
+    }
+
+    private static String normalizeTarget(String target) {
+        return target != null && (target.equals("front") || target.equals("back")
+                || target.equals("both")) ? target : "external";
     }
 }

@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.gushu101.vcames"
         minSdk = 33
         targetSdk = 35
-        versionCode = 10100
-        versionName = "1.1.0"
+        versionCode = 10200
+        versionName = "1.2.0"
     }
 
     flavorDimensions += "deployment"
@@ -40,6 +40,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
+    sourceSets.getByName("root").assets.srcDir(
+        project.layout.buildDirectory.dir("generated/rootBridgeAssets")
+    )
 
     lint {
         abortOnError = true

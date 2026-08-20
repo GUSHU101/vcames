@@ -8,5 +8,6 @@
 2. 能在当前 stock VINTF 下注册的匹配版本 External Camera Provider；
 3. 普通签名的 `io.github.gushu101.vcames` Root 控制 APK。
 
-重启后在 Magisk 的模块页面执行 Action。只有状态为 `READY` 才表示基础系统链路可用。
+重启后在 Magisk 的模块页面执行 Action。`READY_EXTERNAL_ONLY`、
+`READY_REPLACEMENT_ONLY` 或 `READY_EXTERNAL_AND_REPLACEMENT` 分别表示对应链路可用。
 其他状态及处理方式见项目的 `docs/ROOT_STOCK.md`。
