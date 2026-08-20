@@ -70,6 +70,7 @@ bool Config::Validate(std::string* error) const {
     }
     if ((width & 1) != 0 || (height & 1) != 0) {
         return fail("resolution width and height must be even");
+    }
     if (fps < 1 || fps > 60) {
         return fail("fps is outside 1 through 60");
     }
