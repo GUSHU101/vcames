@@ -1,0 +1,29 @@
+package {
+    default_applicable_licenses: ["vcames_license"],
+}
+
+license {
+    name: "vcames_license",
+    visibility: ["//visibility:public"],
+    license_kinds: ["SPDX-license-identifier-Apache-2.0"],
+    license_text: ["LICENSE"],
+}
+
+android_app {
+    name: "VCamES",
+    manifest: "app/src/main/AndroidManifest.xml",
+    srcs: ["app/src/main/java/**/*.java"],
+    resource_dirs: ["app/src/main/res"],
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+    min_sdk_version: "33",
+    target_sdk_version: "current",
+    java_version: "11",
+    optimize: {
+        enabled: true,
+        shrink: true,
+        proguard_flags_files: ["app/proguard-rules.pro"],
+    },
+}

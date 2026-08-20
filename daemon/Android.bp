@@ -1,0 +1,42 @@
+package {
+    default_applicable_licenses: ["vcames_license"],
+}
+
+cc_binary {
+    name: "vcamesd",
+    system_ext_specific: true,
+    init_rc: ["vcamesd.rc"],
+    srcs: [
+        "src/config.cpp",
+        "src/engine.cpp",
+        "src/http_mjpeg_source.cpp",
+        "src/image_transform.cpp",
+        "src/main.cpp",
+        "src/mjpeg_parser.cpp",
+        "src/v4l2_sink.cpp",
+    ],
+    local_include_dirs: [
+        "include",
+        "third_party/stb",
+    ],
+    shared_libs: ["liblog"],
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    cpp_std: "c++20",
+}
+
+cc_test_host {
+    name: "vcames_parser_tests",
+    srcs: [
+        "src/config.cpp",
+        "src/mjpeg_parser.cpp",
+        "tests/parser_test.cpp",
+    ],
+    local_include_dirs: ["include"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    cpp_std: "c++20",
+    test_suites: ["general-tests"],
+}

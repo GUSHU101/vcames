@@ -1,0 +1,6 @@
+[submodule "third_party/v4l2loopback"]
+	path = third_party/v4l2loopback
+	url = https://github.com/v4l2loopback/v4l2loopback.git
+[submodule "daemon/third_party/stb"]
+	path = daemon/third_party/stb
+	url = https://github.com/nothings/stb.git

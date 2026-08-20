@@ -1,0 +1,14 @@
+type vcamesd, domain, coredomain;
+type vcamesd_exec, exec_type, system_file_type, file_type;
+
+init_daemon_domain(vcamesd)
+net_domain(vcamesd)
+
+allow vcamesd self:unix_stream_socket create_stream_socket_perms;
+allow vcamesd self:tcp_socket create_stream_socket_perms;
+allow vcamesd port_type:tcp_socket name_connect;
+allow vcamesd video_device:chr_file rw_file_perms;
+
+# The controller is platform-signed and uses android.uid.system. The daemon
+# independently checks SO_PEERCRED and accepts only UID 0 or 1000 on Android.
+allow system_app vcamesd:unix_stream_socket connectto;

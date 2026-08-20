@@ -1,0 +1,12 @@
+VCamES
+Copyright 2026 GUSHU101 and contributors
+
+This product contains stb_image and stb_image_write by Sean Barrett and
+contributors. See daemon/third_party/stb/LICENSE for its license terms.
+
+The optional v4l2loopback git submodule is maintained by IOhannes m zmoelnig
+and contributors and is licensed separately under GPL-2.0-or-later. Its code
+is not relicensed by this project.
+
+Android and Pixel are trademarks of Google LLC. This project is not endorsed
+by or affiliated with Google.
