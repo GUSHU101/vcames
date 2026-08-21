@@ -22,7 +22,8 @@ jobs:
       - uses: android-actions/setup-android@v4
       - name: Check shell syntax
         run: |
-          sh -n tools/root/build-root-module.sh root-module/template/*.sh
+          bash -n tools/root/build-root-module.sh
+          sh -n root-module/template/*.sh
           python3 -m py_compile tools/root/build_device_pack.py
           ! grep -q 'allow untrusted_app_all magisk:unix_stream_socket connectto' root-module/template/sepolicy.rule
           grep -q 'memory_access=read-only' daemon/src/shared_frame_bus.cpp
