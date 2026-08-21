@@ -54,7 +54,7 @@ void TestArgumentsAreLiteralAndBounded() {
     assert(Contains(args, "-rtsp_transport"));
     assert(Contains(args, "-protocol_whitelist"));
     const std::string whitelist = vcames::FfmpegProtocolWhitelist();
-    for (const std::string& forbidden : {"file", "concat", "data", "subfile", "unix"}) {
+    for (const char* forbidden : {"file", "concat", "data", "subfile", "unix"}) {
         assert(whitelist.find(forbidden) == std::string::npos);
     }
     assert(args.back() == "pipe:1");
