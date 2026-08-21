@@ -45,7 +45,6 @@ function Get-VendorFamily([string]$Manufacturer, [string]$Brand) {
     $identity = "$Manufacturer|$Brand".ToLowerInvariant()
     if ($identity -match 'google') { return 'google' }
     if ($identity -match 'xiaomi|redmi|poco') { return 'xiaomi' }
-    if ($identity -match 'samsung') { return 'samsung' }
     return 'unsupported'
 }
 
@@ -60,9 +59,16 @@ function Get-SocFamily([string]$Identity) {
 
 $manufacturer = Invoke-AdbText @('shell', 'getprop', 'ro.product.manufacturer')
 $brand = Invoke-AdbText @('shell', 'getprop', 'ro.product.brand')
+$model = Invoke-AdbText @('shell', 'getprop', 'ro.product.model')
 $product = Invoke-AdbText @('shell', 'getprop', 'ro.product.name')
 $device = Invoke-AdbText @('shell', 'getprop', 'ro.product.device')
 $api = Invoke-AdbText @('shell', 'getprop', 'ro.build.version.sdk')
+$buildId = Invoke-AdbText @('shell', 'getprop', 'ro.build.id')
+$securityPatch = Invoke-AdbText @('shell', 'getprop', 'ro.build.version.security_patch')
+$incremental = Invoke-AdbText @('shell', 'getprop', 'ro.build.version.incremental')
+$region = Invoke-AdbText @('shell', 'sh', '-c',
+    'r=$(getprop ro.miui.region); [ -n "$r" ] || r=$(getprop ro.product.mod_device); printf %s "$r"')
+$kernelRelease = Invoke-AdbText @('shell', 'uname', '-r')
 $socManufacturer = Invoke-AdbText @('shell', 'getprop', 'ro.soc.manufacturer')
 $socModel = Invoke-AdbText @('shell', 'getprop', 'ro.soc.model')
 $boardPlatform = Invoke-AdbText @('shell', 'getprop', 'ro.board.platform')
@@ -104,7 +110,7 @@ $systemHash = Get-Sha256Text $systemFingerprint
 $vendorHash = Get-Sha256Text $vendorFingerprint
 
 if ($vendorFamily -eq 'unsupported') {
-    throw "仅支持 Google、小米/Redmi/POCO、Samsung：$manufacturer / $brand"
+    throw "当前产品范围仅支持 Google、小米/Redmi/POCO：$manufacturer / $brand"
 }
 if ($socFamily -eq 'unknown') {
     throw "无法识别 SoC family：$socManufacturer / $socModel / $boardPlatform / $hardware"
@@ -134,9 +140,15 @@ $content = @(
     "camera_hal_transport=$cameraHalTransport"
     "manufacturer=$manufacturer"
     "brand=$brand"
+    "model=$model"
     "product=$product"
     "device=$device"
     "api=$api"
+    "build_id=$buildId"
+    "security_patch=$securityPatch"
+    "incremental=$incremental"
+    "region=$region"
+    "kernel_release=$kernelRelease"
     "system_fingerprint_sha256=$systemHash"
     "vendor_fingerprint_sha256=$vendorHash"
     "cameraserver_sha256=$cameraHash"

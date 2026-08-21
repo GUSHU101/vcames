@@ -5,7 +5,9 @@ PROPFILE=false
 POSTFSDATA=false
 LATESTARTSERVICE=true
 
-ui_print "- VCamES Root Bridge 2.2.0"
+module_version="$(sed -n 's/^version=//p' "$MODPATH/module.prop" | head -n 1)"
+[ -n "$module_version" ] || abort "! module.prop 缺少版本信息"
+ui_print "- VCamES Root Bridge $module_version"
 
 api="$(getprop ro.build.version.sdk)"
 case "$api" in
@@ -26,8 +28,7 @@ vendor_identity="$(printf '%s|%s' "$manufacturer" "$brand" | tr '[:upper:]' '[:l
 case "$vendor_identity" in
   *google*) vendor_family="google" ;;
   *xiaomi*|*redmi*|*poco*) vendor_family="xiaomi" ;;
-  *samsung*) vendor_family="samsung" ;;
-  *) abort "! 仅支持 Google、小米/Redmi/POCO、Samsung，当前为 $manufacturer / $brand" ;;
+  *) abort "! 当前产品范围仅支持 Google、小米/Redmi/POCO，当前为 $manufacturer / $brand" ;;
 esac
 
 soc_identity="$(printf '%s|%s|%s|%s' \

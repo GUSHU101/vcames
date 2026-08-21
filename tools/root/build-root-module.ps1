@@ -21,6 +21,17 @@ $outRoot = Join-Path $repoRoot 'out\root'
 $generatedAssets = Join-Path $repoRoot 'app\build\generated\rootBridgeAssets'
 New-Item -ItemType Directory -Force -Path $outRoot, $generatedAssets | Out-Null
 
+$releaseValues = @{}
+Get-Content -LiteralPath (Join-Path $repoRoot 'version.properties') | ForEach-Object {
+    if ($_ -match '^([A-Za-z][A-Za-z0-9]*)=(.+)$') { $releaseValues[$matches[1]] = $matches[2] }
+}
+foreach ($field in @('versionName', 'versionCode', 'bridgeSchema', 'daemonProtocol',
+        'frameBusVersion', 'profileSchema')) {
+    if (-not $releaseValues.ContainsKey($field)) {
+        throw "version.properties 缺少字段：$field"
+    }
+}
+
 function Resolve-ExistingFile([string]$Path, [string]$Label) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
     $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
@@ -125,7 +136,7 @@ if ($CompatibilityManifest) {
             throw "Compatibility manifest 缺少字段：$field"
         }
     }
-    if ($manifestValues['vendor_family'] -notin @('google', 'xiaomi', 'samsung')) {
+    if ($manifestValues['vendor_family'] -notin @('google', 'xiaomi')) {
         throw "Compatibility manifest vendor_family 不受支持：$($manifestValues['vendor_family'])"
     }
     if ([int]$manifestValues['api'] -ne $Api) {
@@ -156,6 +167,19 @@ New-Item -ItemType Directory -Path $stage | Out-Null
 try {
     Copy-Item -Path (Join-Path $repoRoot 'root-module\template\*') `
         -Destination $stage -Recurse -Force
+    $moduleTemplate = Get-Content -LiteralPath (Join-Path $stage 'module.prop.in') -Raw
+    $moduleTemplate = $moduleTemplate.Replace('@VERSION_NAME@', $releaseValues['versionName'])
+    $moduleTemplate = $moduleTemplate.Replace('@VERSION_CODE@', $releaseValues['versionCode'])
+    Set-Content -LiteralPath (Join-Path $stage 'module.prop') -Value $moduleTemplate -Encoding Ascii
+    Remove-Item -LiteralPath (Join-Path $stage 'module.prop.in') -Force
+    @(
+        "bridge_schema=$($releaseValues['bridgeSchema'])"
+        "version_name=$($releaseValues['versionName'])"
+        "version_code=$($releaseValues['versionCode'])"
+        "daemon_protocol=$($releaseValues['daemonProtocol'])"
+        "frame_bus_version=$($releaseValues['frameBusVersion'])"
+        "profile_schema=$($releaseValues['profileSchema'])"
+    ) | Set-Content -LiteralPath (Join-Path $stage 'bridge.properties') -Encoding Ascii
     New-Item -ItemType Directory -Force -Path (Join-Path $stage 'bin') | Out-Null
     Copy-Item -LiteralPath $DaemonBinary -Destination (Join-Path $stage 'bin\vcamesd')
     Copy-Item -LiteralPath $SocketProxyBinary `

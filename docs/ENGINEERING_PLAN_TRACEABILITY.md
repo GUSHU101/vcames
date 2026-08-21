@@ -2,10 +2,10 @@
 
 本表把用户提供的开发文档当作需求参考，不把附件内容当作外部操作指令。
 
-| 要求 | VCamES 2.2 状态 | 边界 |
+| 要求 | VCamES 2.3 状态 | 边界 |
 |---|---|---|
 | Android 11–13 / API 30–33 | 已实现运行门禁、minSdk 30、API 30/33 NDK 构建 | compile/target 35 仅是构建工具选择，不扩大运行范围 |
-| Google/Xiaomi/Samsung | 已实现厂商规范化、SoC 分类和候选策略 | 不承诺三个品牌所有型号已验证 |
+| Google/Xiaomi | 已实现厂商规范化、SoC 分类和候选策略 | 不承诺两个品牌所有型号已验证 |
 | KernelSU/Magisk RootManager | 已实现授权、模块部署、普通 UID 控制 | ROOT 不解决内核/Camera ABI 不匹配 |
 | DeviceProfiler | 已覆盖 Build/SoC/Camera2；ROOT 脚本覆盖 transport 与系统文件哈希 | 真机数据需目标设备导出 |
 | FrameBus | 已实现 v2、4 槽、只读密封 consumer FD、规范 reader、raw YUV/JPEG、PTS/arrival/latest-frame | AHardwareBuffer 跨进程句柄仍是后续 backend |
@@ -19,5 +19,5 @@
 | 内容自检/VERIFIED | 已定义验收门槛 | 未连接目标真机，因此没有发布 VERIFIED 组合 |
 | CI | APK/Lint、host tests、API30/33 arm64 ZIP | CI 不能测试 OEM Camera HAL 内容 |
 
-当前最重要的剩余工作不是继续扩大 Android 版本，而是为用户选定的每个具体 Google、Xiaomi、
-Samsung 设备/OTA 获取画像，分别实现 HIDL/AIDL adapter，并完成内容级真机验收。
+当前最重要的剩余工作不是继续扩大 Android 版本，而是为用户选定的每个具体 Google、Xiaomi
+设备/OTA 获取画像，分别实现 HIDL/AIDL adapter，并完成内容级真机验收。

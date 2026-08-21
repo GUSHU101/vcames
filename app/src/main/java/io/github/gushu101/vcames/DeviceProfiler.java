@@ -29,7 +29,7 @@ final class DeviceProfiler {
                     Build.MANUFACTURER, Build.BRAND);
             String socFamily = CompatibilityEngine.socFamily();
             root.put("schema", 2);
-            root.put("scope", "google-xiaomi-samsung-api30-33");
+            root.put("scope", "google-xiaomi-api30-33-profile-v1");
             root.put("manufacturer", Build.MANUFACTURER);
             root.put("brand", Build.BRAND);
             root.put("vendor_family", vendorFamily);

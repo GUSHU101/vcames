@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/GUSHU101/vcames/profiles/schema/catalog-v1.schema.json",
+  "title": "VCamES signed Profile catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "product_scope", "generated_at", "catalog_status", "entries", "signature"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "product_scope": {"const": "google-xiaomi-android11-13"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "catalog_status": {"enum": ["EMPTY_NO_VERIFIED_PROFILES", "SIGNED_VERIFIED_PROFILES"]},
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["compatibility_id", "profile", "signature", "status"],
+        "properties": {
+          "compatibility_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "profile": {"type": "string", "minLength": 1},
+          "signature": {"type": "string", "minLength": 1},
+          "status": {"const": "VERIFIED"}
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "algorithm", "key_id", "file"],
+      "properties": {
+        "status": {"enum": ["UNSIGNED_DEVELOPMENT", "SIGNED"]},
+        "algorithm": {"const": "Ed25519"},
+        "key_id": {"type": "string"},
+        "file": {"type": "string"}
+      }
+    }
+  }
+}

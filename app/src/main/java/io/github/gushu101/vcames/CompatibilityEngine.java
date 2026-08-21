@@ -26,6 +26,8 @@ final class CompatibilityEngine {
         boolean apiSupported = api >= MIN_API && api <= MAX_API;
         boolean arm64 = Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a");
         boolean vendorSupported = !"unsupported".equals(vendorFamily);
+        boolean replacementSocSupported = "qualcomm".equals(socFamily)
+                || ("google".equals(vendorFamily) && "tensor".equals(socFamily));
 
         if (!apiSupported) {
             blockers.put("仅支持 API 30–33（Android 11–13）");
@@ -34,21 +36,25 @@ final class CompatibilityEngine {
             blockers.put("第一阶段系统组件只构建 arm64-v8a");
         }
         if (!vendorSupported) {
-            blockers.put("仅接受 Google、Xiaomi/Redmi/POCO、Samsung 设备");
+            blockers.put("当前产品范围仅接受 Google、Xiaomi/Redmi/POCO 设备");
         }
         if ("unknown".equals(socFamily)) {
             warnings.put("应用沙箱无法确认 SoC family；打包 replacement 前必须导出 ROOT 完整画像");
         }
 
         String strategy = strategyFamily(vendorFamily, socFamily);
-        boolean candidate = apiSupported && arm64 && vendorSupported;
+        if (vendorSupported && !replacementSocSupported) {
+            warnings.put("第一阶段前后摄替换仅覆盖 Tensor 与 Qualcomm；MediaTek 等待独立适配批次");
+        }
+        boolean externalCandidate = apiSupported && arm64 && vendorSupported;
+        boolean replacementCandidate = externalCandidate && replacementSocSupported;
         result.put("vendor_family", vendorFamily);
         result.put("soc_family", socFamily);
         result.put("strategy_family", strategy);
         result.put("camera_interface", "REQUIRES_ROOT_VINTF_SERVICE_PROBE");
-        result.put("external_candidate", candidate);
-        result.put("replacement_candidate", candidate);
-        result.put("replacement_state", candidate
+        result.put("external_candidate", externalCandidate);
+        result.put("replacement_candidate", replacementCandidate);
+        result.put("replacement_state", replacementCandidate
                 ? "EXACT_BUILD_ADAPTER_REQUIRED"
                 : "UNSUPPORTED_OR_PROFILE_INCOMPLETE");
         result.put("verification", "UNVERIFIED_UNTIL_CONTENT_AND_STRESS_TEST");
@@ -66,9 +72,6 @@ final class CompatibilityEngine {
         if (joined.contains("xiaomi") || joined.contains("redmi")
                 || joined.contains("poco")) {
             return "xiaomi";
-        }
-        if (joined.contains("samsung")) {
-            return "samsung";
         }
         return "unsupported";
     }
@@ -107,9 +110,6 @@ final class CompatibilityEngine {
         }
         if ("google".equals(vendor) && "tensor".equals(soc)) {
             return "google-tensor-provider-probe";
-        }
-        if ("samsung".equals(vendor) && "exynos".equals(soc)) {
-            return "samsung-exynos-provider-probe";
         }
         return vendor + "-" + soc + "-provider-probe";
     }

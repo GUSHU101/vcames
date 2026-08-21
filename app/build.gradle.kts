@@ -1,5 +1,11 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
+}
+
+val releaseProperties = Properties().apply {
+    rootProject.file("version.properties").inputStream().use(::load)
 }
 
 android {
@@ -11,8 +17,8 @@ android {
         applicationId = "io.github.gushu101.vcames"
         minSdk = 30
         targetSdk = 35
-        versionCode = 20200
-        versionName = "2.2.0"
+        versionCode = releaseProperties.getProperty("versionCode").toInt()
+        versionName = releaseProperties.getProperty("versionName")
 
         ndk {
             abiFilters += "arm64-v8a"

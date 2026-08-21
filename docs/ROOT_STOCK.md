@@ -2,7 +2,7 @@
 
 ## 支持定义
 
-Root Bridge 的运行候选范围为 Google、Xiaomi/Redmi/POCO、Samsung，Android 11–13
+Root Bridge 的运行候选范围为 Google、Xiaomi/Redmi/POCO，Android 11–13
 （API 30–33），`arm64-v8a`，KernelSU 或 Magisk。它不承诺任意型号/OTA 已经验证。
 
 ROOT 只提供部署权限，不能绕过内核 vermagic、KMI、`CONFIG_MODVERSIONS`、模块签名、
@@ -37,7 +37,7 @@ Provider 二进制必须与 transport 一起显式打包：Android 11/12 产品�
 replacement 模式不依赖 `/dev/video100`，但必须提供精确 OTA adapter 和兼容性清单。
 不传 adapter 的“一体化 Root APK”不能替换 OEM 前后相机。
 
-Google、Xiaomi、Samsung 的内核模块目录、签名链、Provider 名称和启动时序各不相同；
+Google、Xiaomi 不同型号的内核模块目录、签名链、Provider 名称和启动时序各不相同；
 应以目标 ROM 的 kernel manifest、VINTF、service list 与 vendor ELF 为准，不能跨机复制 `.ko`
 或 adapter。KernelSU system/vendor overlay 还可能要求设备的 metamodule 支持。
 

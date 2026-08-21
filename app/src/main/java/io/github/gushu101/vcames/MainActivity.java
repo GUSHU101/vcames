@@ -4,6 +4,7 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageInfo;
 import android.graphics.Color;
 import android.content.Intent;
 import android.net.Uri;
@@ -24,11 +25,17 @@ import android.widget.ArrayAdapter;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 public final class MainActivity extends Activity {
     private static final long STATUS_INTERVAL_MS = 1000;
@@ -128,14 +135,14 @@ public final class MainActivity extends Activity {
         scroll.addView(root, matchWrap());
 
         TextView title = new TextView(this);
-        title.setText("VCamES 2.2 · System Camera");
+        title.setText("VCamES " + appVersion() + " · System Camera");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(13, 27, 42));
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Google / 小米 / 三星 · Android 11–13 · ROOT · 无 Xposed");
+        subtitle.setText("Google / 小米 · Android 11–13 · ROOT · 无 Xposed");
         subtitle.setTextSize(14);
         subtitle.setTextColor(Color.DKGRAY);
         subtitle.setPadding(0, dp(4), 0, dp(16));
@@ -353,15 +360,12 @@ public final class MainActivity extends Activity {
     private void exportDiagnostics() {
         deploymentView.setText(R.string.diagnostics_collecting);
         ioExecutor.execute(() -> {
-            pendingDiagnostics = "VCamES 2.2 compatibility report\n"
-                    + "generated_at_ms=" + System.currentTimeMillis() + "\n\n"
-                    + DeviceProfiler.collect(this) + "\n\n"
-                    + deploymentBridge.diagnostics(this) + "\n";
+            pendingDiagnostics = buildDiagnosticsReport();
             mainHandler.post(() -> {
                 Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
-                intent.setType("text/plain");
-                intent.putExtra(Intent.EXTRA_TITLE, "vcames-compatibility-report.txt");
+                intent.setType("application/zip");
+                intent.putExtra(Intent.EXTRA_TITLE, "vcames-diagnostics.zip");
                 startActivityForResult(intent, EXPORT_DIAGNOSTICS_REQUEST);
             });
         });
@@ -408,7 +412,7 @@ public final class MainActivity extends Activity {
                 if (output == null) {
                     throw new IOException("文档提供器没有返回输出流");
                 }
-                output.write(pendingDiagnostics.getBytes(StandardCharsets.UTF_8));
+                writeDiagnosticsZip(output, pendingDiagnostics);
                 deploymentView.setText(R.string.diagnostics_exported);
             } catch (IOException e) {
                 toast("诊断导出失败：" + e.getMessage());
@@ -448,13 +452,65 @@ public final class MainActivity extends Activity {
 
     @SuppressLint("SetTextI18n")
     private void showStatus(String rawStatus) {
-        String readable = rawStatus
-                .replace("{", "")
-                .replace("}", "")
-                .replace("\"", "")
-                .replace(",", "  ·  ")
-                .replace(":", ": ");
-        mainHandler.post(() -> statusView.setText(readable));
+        String readable = ProductStatusPresenter.render(rawStatus);
+        int statusColor;
+        if (readable.contains("SAFE_MODE")) {
+            statusColor = Color.rgb(143, 35, 35);
+        } else if (readable.contains("LIMITED")) {
+            statusColor = Color.rgb(151, 94, 18);
+        } else if (readable.contains("READY_UNVERIFIED")) {
+            statusColor = Color.rgb(31, 112, 78);
+        } else {
+            statusColor = Color.rgb(13, 71, 102);
+        }
+        mainHandler.post(() -> {
+            statusView.setText(readable);
+            statusView.setBackgroundColor(statusColor);
+        });
+    }
+
+    private String buildDiagnosticsReport() {
+        JSONObject report = new JSONObject();
+        try {
+            report.put("report_schema", 1);
+            report.put("app_version", appVersion());
+            report.put("generated_at_ms", System.currentTimeMillis());
+            report.put("product_scope", "google-xiaomi-android11-13");
+            report.put("profile_schema", 1);
+            report.put("profile_catalog_state", "EMPTY_NO_VERIFIED_PROFILES");
+            report.put("verification", "UNVERIFIED_NO_SIGNED_PROFILE_MATCH");
+            report.put("device_profile", new JSONObject(DeviceProfiler.collect(this)));
+            report.put("root_diagnostics", deploymentBridge.diagnostics(this));
+            report.put("user_media_included", false);
+            report.put("privacy_note", "不包含用户视频、帧内容、账号或网络凭据");
+            return report.toString(2);
+        } catch (JSONException failure) {
+            return "{\"report_schema\":1,\"error\":\"diagnostic serialization failed\","
+                    + "\"user_media_included\":false}";
+        }
+    }
+
+    private static void writeDiagnosticsZip(OutputStream output, String report) throws IOException {
+        try (ZipOutputStream zip = new ZipOutputStream(new BufferedOutputStream(output))) {
+            zip.putNextEntry(new ZipEntry("report.json"));
+            zip.write(report.getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("README.txt"));
+            zip.write(("VCamES 兼容性诊断包\n"
+                    + "只包含设备、Camera2、Root/模块与进程状态；不包含任何用户媒体。\n"
+                    + "READY_UNVERIFIED 仍需在对应设备和 OTA 上完成功能与压力验收。\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+    }
+
+    private String appVersion() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return info.versionName == null ? "unknown" : info.versionName;
+        } catch (PackageManager.NameNotFoundException impossible) {
+            return "unknown";
+        }
     }
 
     private void toast(String message) {

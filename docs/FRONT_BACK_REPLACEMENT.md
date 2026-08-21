@@ -7,7 +7,7 @@
 Provider proxy；Root 原厂系统只能维护与完整 OTA 绑定的 adapter。
 
 本项目不提供 ptrace/ShadowHook 通用注入器，不关闭 SELinux，也不会在 ABI/hash 不匹配时
-尝试启动。Google、Xiaomi、Samsung 分别还要按 Qualcomm/Tensor/MediaTek/Exynos 与实际
+尝试启动。Google、Xiaomi 分别还要按 Qualcomm/Tensor/MediaTek 与实际
 HIDL/AIDL transport 分支实现。
 
 ## adapter 服务协议 v2

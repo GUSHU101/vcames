@@ -36,9 +36,9 @@ $denials = Invoke-AdbShell 'logcat -b all -d 2>/dev/null | grep "avc:  denied" |
 $api = 0
 [void][int]::TryParse($apiText, [ref]$api)
 $vendorIdentity = "$manufacturer|$brand".ToLowerInvariant()
-$supportedVendor = $vendorIdentity -match 'google|xiaomi|redmi|poco|samsung'
+$supportedVendor = $vendorIdentity -match 'google|xiaomi|redmi|poco'
 $checks = [ordered]@{
-    'Google/Xiaomi/Samsung' = $supportedVendor
+    'Google/Xiaomi product scope' = $supportedVendor
     'API 30-33' = $api -ge 30 -and $api -le 33
     'SELinux enforcing' = $enforcing -eq 'Enforcing'
     'vcamesd running' = $service -eq 'running'

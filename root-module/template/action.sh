@@ -1,7 +1,8 @@
 #!/system/bin/sh
 
 STATE_DIR="/data/adb/vcames"
-echo "VCamES Root Bridge"
+module_version="$(sed -n 's/^version=//p' "${0%/*}/module.prop" | head -n 1)"
+echo "VCamES Root Bridge ${module_version:-unknown}"
 echo "设备: $(getprop ro.product.model) ($(getprop ro.product.device))"
 echo "厂商: $(getprop ro.product.manufacturer) / $(getprop ro.product.brand)"
 echo "SoC: $(getprop ro.soc.manufacturer) $(getprop ro.soc.model) / $(getprop ro.board.platform)"
@@ -30,6 +31,11 @@ if [ -f "$STATE_DIR/disable-replacement" ]; then
 else
   echo "BootGuard: 正常"
 fi
+case "$(cat "$STATE_DIR/status.txt" 2>/dev/null)" in
+  SAFE_MODE_CORE_*)
+    echo "Core supervisor: 本次启动已安全停止；重启后会重试，继续失败时请导出 diagnostics.zip"
+    ;;
+esac
 [ ! -f "$STATE_DIR/process-stable.properties" ] || {
   echo "进程稳定记录（不代表相机内容已验证）："
   sed 's/^/  /' "$STATE_DIR/process-stable.properties"

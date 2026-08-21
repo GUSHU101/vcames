@@ -3,7 +3,7 @@
 旧逻辑把 Pixel 型号和 Android 11–15 当作主要兼容轴，并把 JPEG/V4L2 external 链路与
 “替换前后摄像头”混为一谈。该方向已纠正：
 
-- 运行范围收窄到 Google/Xiaomi/Samsung、API 30–33；
+- 运行范围收窄到 Google/Xiaomi、API 30–33；
 - 适配选择改为厂商 + SoC + HIDL/AIDL 实测 + 精确构建哈希；
 - external 只代表新增外置 ID，不能声明替换原前后摄；
 - front/back/both 必须由专用 adapter 接管 OEM 输出 buffer，且无 adapter 时失败关闭；

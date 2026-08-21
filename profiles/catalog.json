@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "product_scope": "google-xiaomi-android11-13",
+  "generated_at": "2026-08-21T00:00:00Z",
+  "catalog_status": "EMPTY_NO_VERIFIED_PROFILES",
+  "entries": [],
+  "signature": {
+    "status": "UNSIGNED_DEVELOPMENT",
+    "algorithm": "Ed25519",
+    "key_id": "",
+    "file": ""
+  }
+}

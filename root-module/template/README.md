@@ -1,6 +1,6 @@
 # VCamES Root Bridge
 
-适用于已 Root 的 Google、Xiaomi/Redmi/POCO、Samsung Android 11–13（API 30–33）arm64
+适用于已 Root 的 Google、Xiaomi/Redmi/POCO Android 11–13（API 30–33）arm64
 原厂系统，兼容 KernelSU/Magisk 模块生命周期，不使用 Xposed/Zygisk，不关闭 SELinux。
 `vcamesd` 建立端点后会降权到 Android system UID，并仅保留 camera/inet 补充组；降权失败
 会直接退出。

@@ -25,6 +25,12 @@ jobs:
           sh -n tools/root/build-root-module.sh root-module/template/*.sh
           ! grep -q 'allow untrusted_app_all magisk:unix_stream_socket connectto' root-module/template/sepolicy.rule
           grep -q 'memory_access=read-only' daemon/src/shared_frame_bus.cpp
+      - name: Validate Profile catalog and release gates
+        run: |
+          python3 -m json.tool profiles/schema/profile-v1.schema.json >/dev/null
+          python3 -m json.tool profiles/schema/catalog-v1.schema.json >/dev/null
+          python3 tools/compatibility-builder/validate_profiles.py profiles/catalog.json
+          python3 -m unittest discover -s tools/compatibility-builder/tests -v
       - name: Install SDK
         run: sdkmanager 'platforms;android-35' 'build-tools;36.0.0' 'ndk;27.2.12479018'
       - name: Gradle build and lint
@@ -40,6 +46,11 @@ jobs:
           unzip -t out/root/VCamES-Root-API30.zip
           unzip -t out/root/VCamES-Root-API33.zip
           unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx module.prop
+          unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx bridge.properties
+          . ./version.properties
+          test "$(unzip -p out/root/VCamES-Root-API30.zip module.prop | sed -n 's/^versionCode=//p' | tr -d '\r')" = "$versionCode"
+          test "$(unzip -p out/root/VCamES-Root-API30.zip bridge.properties | sed -n 's/^daemon_protocol=//p' | tr -d '\r')" = "$daemonProtocol"
+          test "$(unzip -p out/root/VCamES-Root-API30.zip bridge.properties | sed -n 's/^frame_bus_version=//p' | tr -d '\r')" = "$frameBusVersion"
           unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx controller.apk
           unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx bin/vcamesd
           unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx bin/vcames-socket-proxy

@@ -5,7 +5,7 @@
 
 ## 已落地
 
-| 审计问题 | VCamES 2.2 整改 | 验证方式 |
+| 审计问题 | VCamES 2.2–2.3 整改 | 验证方式 |
 |---|---|---|
 | Java 逐像素 YUV_420_888 → NV21 | 转换迁入 C++20/JNI，支持 crop、row/pixel stride、常见交错 UV 快速路径，Java 复用输出数组 | host 单元测试、system/root APK arm64 编译 |
 | FrameBus consumer 可写、校验分散 | 通过 `/proc/self/fd` 重新以 `O_RDONLY` 打开；固定大小 seal；新增 `SharedFrameBusReader` 统一校验访问模式、seal、header、精确映射大小、slot 和帧元数据 | Linux FrameBus 测试检查 `F_GETFL`、写入 `EBADF`、attach/copy |
@@ -18,7 +18,7 @@
 
 ## 仍需设备/厂商输入
 
-仓库不能凭通用代码生成 Google、Xiaomi、Samsung 所有 OTA 的前后 Camera HAL adapter。
+仓库不能凭通用代码生成 Google、Xiaomi 所有 OTA 的前后 Camera HAL adapter。
 真正替换原 front/back ID 仍需每个 `model + SoC + OTA fingerprint + Camera transport` 的
 vendor 文件/符号、精确 adapter 和真机。未完成 Camera2 内容比对、并发、secure/RAW/depth
 回退与 30 分钟压力测试的组合必须保持 `UNVERIFIED`。

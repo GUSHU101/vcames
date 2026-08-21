@@ -26,6 +26,31 @@ cleanup() {
 trap cleanup EXIT
 
 cp -R "$ROOT_DIR/root-module/template/." "$STAGE/"
+version_value() {
+  sed -n "s/^$1=//p" "$ROOT_DIR/version.properties" | head -n 1
+}
+VERSION_NAME="$(version_value versionName)"
+VERSION_CODE="$(version_value versionCode)"
+BRIDGE_SCHEMA="$(version_value bridgeSchema)"
+DAEMON_PROTOCOL="$(version_value daemonProtocol)"
+FRAME_BUS_VERSION="$(version_value frameBusVersion)"
+PROFILE_SCHEMA="$(version_value profileSchema)"
+for value in "$VERSION_NAME" "$VERSION_CODE" "$BRIDGE_SCHEMA" \
+    "$DAEMON_PROTOCOL" "$FRAME_BUS_VERSION" "$PROFILE_SCHEMA"; do
+  [[ -n "$value" ]] || { echo "version.properties is incomplete" >&2; exit 64; }
+done
+sed -e "s/@VERSION_NAME@/$VERSION_NAME/g" \
+  -e "s/@VERSION_CODE@/$VERSION_CODE/g" \
+  "$STAGE/module.prop.in" >"$STAGE/module.prop"
+rm -f -- "$STAGE/module.prop.in"
+cat >"$STAGE/bridge.properties" <<EOF
+bridge_schema=$BRIDGE_SCHEMA
+version_name=$VERSION_NAME
+version_code=$VERSION_CODE
+daemon_protocol=$DAEMON_PROTOCOL
+frame_bus_version=$FRAME_BUS_VERSION
+profile_schema=$PROFILE_SCHEMA
+EOF
 mkdir -p "$STAGE/bin" "$STAGE/system/vendor/etc/vintf/manifest"
 cp "$BUILD_DIR/vcamesd" "$STAGE/bin/vcamesd"
 cp "$BUILD_DIR/vcames-socket-proxy" "$STAGE/bin/vcames-socket-proxy"
@@ -66,7 +91,7 @@ if [[ -n "${VCAMES_REPLACEMENT_ADAPTER:-}" ]]; then
     }
   done
   manifest_vendor="$(sed -n 's/^vendor_family=//p' "$VCAMES_COMPATIBILITY_MANIFEST" | head -n 1)"
-  case "$manifest_vendor" in google|xiaomi|samsung) ;; *)
+  case "$manifest_vendor" in google|xiaomi) ;; *)
     echo "Unsupported vendor_family: $manifest_vendor" >&2; exit 64 ;;
   esac
   manifest_api="$(sed -n 's/^api=//p' "$VCAMES_COMPATIBILITY_MANIFEST" | head -n 1)"

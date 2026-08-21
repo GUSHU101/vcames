@@ -9,7 +9,7 @@
 静态 metadata、capture request/result 语义，仅替换普通预览/录像/拍照输出 buffer。
 secure/protected、RAW、depth 或未知 stream 必须拒绝虚拟帧并回退 OEM pipeline。
 
-运行范围是 Google/Xiaomi/Samsung、Android 11–13（API 30–33）、arm64。HIDL/AIDL 由
+运行范围是 Google/Xiaomi、Android 11–13（API 30–33）、arm64。HIDL/AIDL 由
 目标 VINTF、服务注册和 ELF 集合实测，不能按品牌或 Android 版本猜测。
 
 ## 组件

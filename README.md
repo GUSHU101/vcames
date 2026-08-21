@@ -1,6 +1,6 @@
 # VCamES
 
-VCamES 2.2 是面向 Google、Xiaomi/Redmi/POCO、Samsung 的 Android 11–13
+VCamES 2.3 是面向 Google、Xiaomi/Redmi/POCO 的 Android 11–13
 （API 30–33）arm64 系统级虚拟相机工程。它支持定制 ROM 原生集成和已 Root 原厂系统，
 不使用 Xposed/Zygisk，也不把代码注入目标应用。
 
@@ -33,6 +33,9 @@ VCamES 2.2 是面向 Google、Xiaomi/Redmi/POCO、Samsung 的 Android 11–13
   BootGuard 连续失败三次禁用 replacement，并保留 external 救援链路；
 - External Provider 构建显式区分 HIDL 2.4、HIDL 2.7 和 AIDL v1，不再向通用包塞入固定声明；
 - API 30 与 API 33 arm64 ROOT 构建、system/root APK、Lint、原生测试和 CI。
+- 单一 `version.properties` 同步 APK、Root 模块与 daemon/FrameBus/Profile 协议契约；
+- Profile v1、Ed25519 离线签名工具与 fail-closed 目录门禁；当前目录为空，不宣称任何 OTA 已 VERIFIED；
+- UI 输出 READY_UNVERIFIED/LIMITED/SAFE_MODE 分层状态，并导出不含用户媒体的 `diagnostics.zip`。
 
 ## 数据路径
 
@@ -83,7 +86,8 @@ external 仍要求匹配内核的 v4l2loopback 与可注册的 Provider，前后
 4. 安装 `out/root/VCamES-Root-standalone.apk`，点击“授权 ROOT 并部署”，重启。
 5. 通过 Camera2 内容测试与压力测试后，才能把单一组合标记为 `VERIFIED`。
 
-详见 [厂商/SoC 支持策略](docs/VENDOR_SUPPORT.md)、[原厂 Root 部署](docs/ROOT_STOCK.md)、
+详见 [产品支持范围](docs/PRODUCT_SUPPORT.md)、[Profile v1](docs/PROFILE_SCHEMA.md)、
+[发布门禁](docs/RELEASE_GATES.md)、[厂商/SoC 支持策略](docs/VENDOR_SUPPORT.md)、[原厂 Root 部署](docs/ROOT_STOCK.md)、
 [前后摄像头替换](docs/FRONT_BACK_REPLACEMENT.md)、[设备画像](docs/DEVICE_PROFILING.md) 和
 [真机验收门槛](docs/VALIDATION_PLAN.md)。
 
@@ -114,6 +118,8 @@ Provider，并在同一内核构建中接入 v4l2loopback。详见 [AOSP 集成]
 [VCamLab-2.0](https://github.com/GUSHU101/VCamLab-2.0)。用户提供 APK 仅做离线静态分析，
 没有执行、上传、复制其私有二进制或 hook 实现，见 [参考 APK 分析](docs/REFERENCE_APK.md)。
 新增 PDF 的工程建议落实/延期边界见 [PDF 参考审阅](docs/REFERENCE_PDF_REVIEW.md) 和
-[深度审计整改记录](docs/DEEP_AUDIT_REMEDIATION.md)。
+[深度审计整改记录](docs/DEEP_AUDIT_REMEDIATION.md)。本轮产品化整改见
+[Google/Xiaomi 产品化指南整改记录](docs/PRODUCTIZATION_GUIDE_REMEDIATION.md)，资源边界见
+[资源与许可边界](docs/LICENSED_RESOURCES.md)。
 
 自有代码采用 Apache-2.0；第三方依赖按各自许可证发布，见 [NOTICE](NOTICE)。

@@ -9,7 +9,6 @@ import java.io.InputStream;
 
 final class VariantDeploymentBridge implements DeploymentBridge {
     private static final String MODULE_ASSET = "vcames-root-bridge.zip";
-    private static final int BRIDGE_VERSION_CODE = 20100;
 
     @Override
     public String actionLabel() {
@@ -22,10 +21,18 @@ final class VariantDeploymentBridge implements DeploymentBridge {
         if (!probe.granted) {
             return "未获得 ROOT。请在 KernelSU 或 Magisk 中允许 VCamES。\n" + probe.output;
         }
+        final RootBridgeManifest manifest;
+        try {
+            manifest = RootBridgeManifest.fromAsset(context);
+        } catch (IOException invalidPayload) {
+            return "ROOT 已授权（" + probe.providerName() + "），但 APK 内置 Root Bridge 无效："
+                    + invalidPayload.getMessage();
+        }
         String diagnostics = RootManager.diagnostics(diagnosticCommand());
         if (diagnostics.contains("module=installed")
-                && parseIntField(diagnostics, "module_version=") >= BRIDGE_VERSION_CODE) {
-            return "ROOT 已授权（" + probe.providerName() + "），Root Bridge 已安装。\n"
+                && manifest.matchesInstalled(diagnostics)) {
+            return "ROOT 已授权（" + probe.providerName() + "），Root Bridge "
+                    + manifest.versionName + " 及协议契约已匹配。\n"
                     + probe.output + "\n" + diagnostics;
         }
 
@@ -35,7 +42,7 @@ final class VariantDeploymentBridge implements DeploymentBridge {
             byte[] buffer = new byte[16 * 1024];
             int count;
             long total = 0;
-            while ((count = input.read(buffer)) >= 0) {
+            while ((count = input.read(buffer)) != -1) {
                 total += count;
                 if (total > 128L * 1024L * 1024L) {
                     throw new IOException("内置 Root Bridge 超过 128 MiB 安全限制");
@@ -76,11 +83,16 @@ final class VariantDeploymentBridge implements DeploymentBridge {
         return "printf 'device='; getprop ro.product.device; "
                 + "printf ' brand='; getprop ro.product.brand; "
                 + "printf ' product='; getprop ro.product.name; "
+                + "printf ' model='; getprop ro.product.model; "
                 + "printf ' manufacturer='; getprop ro.product.manufacturer; "
                 + "printf ' soc_manufacturer='; getprop ro.soc.manufacturer; "
                 + "printf ' soc='; getprop ro.soc.model; "
                 + "printf ' board_platform='; getprop ro.board.platform; "
                 + "printf ' api='; getprop ro.build.version.sdk; "
+                + "printf ' build_id='; getprop ro.build.id; "
+                + "printf ' security_patch='; getprop ro.build.version.security_patch; "
+                + "printf ' region='; r=$(getprop ro.miui.region); "
+                + "[ -n \"$r\" ] || r=$(getprop ro.product.mod_device); printf '%s' \"$r\"; "
                 + "printf ' kernel='; uname -r; "
                 + "printf ' selinux='; getenforce; "
                 + "printf '\\nsystem_fingerprint_sha256='; "
@@ -97,23 +109,14 @@ final class VariantDeploymentBridge implements DeploymentBridge {
                 + "printf '\\nmodule=installed module_version='; "
                 + "sed -n 's/^versionCode=//p' "
                 + "/data/adb/modules/vcames_root_bridge/module.prop | head -n 1; "
+                + "printf ' module_bridge_schema='; sed -n 's/^bridge_schema=//p' "
+                + "/data/adb/modules/vcames_root_bridge/bridge.properties | head -n 1; "
+                + "printf ' module_daemon_protocol='; sed -n 's/^daemon_protocol=//p' "
+                + "/data/adb/modules/vcames_root_bridge/bridge.properties | head -n 1; "
+                + "printf ' module_frame_bus_version='; sed -n 's/^frame_bus_version=//p' "
+                + "/data/adb/modules/vcames_root_bridge/bridge.properties | head -n 1; "
+                + "printf ' module_profile_schema='; sed -n 's/^profile_schema=//p' "
+                + "/data/adb/modules/vcames_root_bridge/bridge.properties | head -n 1; "
                 + "else printf '\\nmodule=missing'; fi";
-    }
-
-    private static int parseIntField(String output, String prefix) {
-        int start = output.indexOf(prefix);
-        if (start < 0) {
-            return -1;
-        }
-        start += prefix.length();
-        int end = start;
-        while (end < output.length() && Character.isDigit(output.charAt(end))) {
-            end++;
-        }
-        try {
-            return Integer.parseInt(output.substring(start, end));
-        } catch (NumberFormatException e) {
-            return -1;
-        }
     }
 }

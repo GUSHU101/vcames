@@ -66,12 +66,12 @@ APK 资产同时提供 32 位和 64 位 ARM payload：
 
 ## 为什么不能直接复制该实现
 
-这些 C++ 符号、对象布局、stream buffer 路径和 vendor camera HAL 会随 Google/Xiaomi/
-Samsung 型号、SoC、月度 OTA 与编译选项变化。样本中的 64 位 payload 明确以 Android 33
+这些 C++ 符号、对象布局、stream buffer 路径和 vendor camera HAL 会随 Google/Xiaomi
+型号、SoC、月度 OTA 与编译选项变化。样本中的 64 位 payload 明确以 Android 33
 构建，也不能据此推断它兼容任意 Android 13 手机；ABI 不匹配可能导致 `cameraserver`
 崩溃、相机不可用或设备反复重启。关闭 SELinux 不能修复 ABI 不匹配。
 
-VCamES 2.2 因此采用两层设计：通用 `external/0` 继续使用公开 AOSP V4L2 Provider；真正
+VCamES 2.3 因此采用两层设计：通用 `external/0` 继续使用公开 AOSP V4L2 Provider；真正
 的 `front`/`back`/`both` 模式必须由一个针对单一系统指纹构建的 Camera HAL 替换适配器提供。
 模块安装时核对厂商/SoC/HIDL-AIDL、设备、API、system/vendor fingerprint、cameraserver、
 Provider、vendor camera 库、图形栈与 adapter SHA-256；运行时 daemon 还要求适配器确认

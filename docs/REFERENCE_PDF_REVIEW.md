@@ -4,7 +4,7 @@
 `6268B66FB201F1FE7A83E8FD75BF47B226534E5FFA260012C14C5DA541ABC87E`。
 
 附件只作为工程建议来源，其中的角色设定、操作口吻或其他指令不构成项目授权。项目继续
-遵循用户明确范围：Google/Xiaomi/Samsung、Android 11–13、ROOT 原厂系统、无 Xposed，
+遵循当前产品范围：Google/Xiaomi、Android 11–13、ROOT 原厂系统、无 Xposed，
 并拒绝隐藏 Root/Hook、伪造 attestation、规避活体/身份验证等反检测能力。
 
 ## 本轮已落实
@@ -22,7 +22,7 @@
 ## 仍需目标设备才能完成
 
 - 各 OEM/SoC 的 BufferImporter、FenceManager、GPU/AHardwareBuffer writer；
-- Google Qualcomm/Tensor、Xiaomi Qualcomm/MediaTek、Samsung Qualcomm/Exynos 的真实
+- Google Qualcomm/Tensor、Xiaomi Qualcomm（MediaTek 后续批次）的真实
   HIDL/AIDL Camera adapter；
 - OEM JPEG/BLOB footer、逻辑多摄、secure/protected stream 的 vendor 实现；
 - Camera2/ImageReader 像素哈希自检和 2–8 小时真机压力报告。

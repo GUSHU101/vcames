@@ -46,7 +46,7 @@ $kernelConfig = Invoke-RootShell 'if [ -r /proc/config.gz ]; then zcat /proc/con
 $api = 0
 [void][int]::TryParse($apiText, [ref]$api)
 $vendorIdentity = "$manufacturer|$brand".ToLowerInvariant()
-$supportedVendor = $vendorIdentity -match 'google|xiaomi|redmi|poco|samsung'
+$supportedVendor = $vendorIdentity -match 'google|xiaomi|redmi|poco'
 $hasVideo = -not [string]::IsNullOrWhiteSpace($videoNode)
 $hasProvider = $provider -match 'external/0'
 
@@ -55,7 +55,7 @@ Write-Host "SoC：$socManufacturer $socModel / $boardPlatform · kernel $kernel"
 Write-Host "Root：UID $rootUid · SELinux：$selinux"
 Write-Host "内核配置：$kernelConfig"
 Write-Host
-Write-Host ($(if ($supportedVendor) {'[PASS]'} else {'[FAIL]'}) + ' Google / 小米 / 三星厂商范围')
+Write-Host ($(if ($supportedVendor) {'[PASS]'} else {'[FAIL]'}) + ' Google / 小米厂商范围')
 Write-Host ($(if ($api -ge 30 -and $api -le 33) {'[PASS]'} else {'[FAIL]'}) + ' API 30-33')
 Write-Host ($(if ($selinux -eq 'Enforcing') {'[PASS]'} else {'[FAIL]'}) + ' SELinux enforcing')
 Write-Host ($(if ($hasVideo) {'[PASS]'} else {'[NEED]'}) + ' /dev/video100')

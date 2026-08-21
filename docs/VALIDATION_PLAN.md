@@ -1,4 +1,4 @@
-# Google / Xiaomi / Samsung 真机验收门槛
+# Google / Xiaomi 真机验收门槛
 
 每个 `vendor + model/device + SoC + OTA fingerprint + root manager + adapter` 组合独立验收。
 进程启动或协议握手不等于画面替换成功。

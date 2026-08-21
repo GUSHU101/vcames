@@ -26,7 +26,7 @@ Android 版本推断。片段分别复制互斥的 HIDL 2.4、HIDL 2.7 或 AIDL 
 
 ## 内核和启动
 
-在目标 Google/Xiaomi/Samsung 的同一 kernel build 中接入 `third_party/v4l2loopback`，并将
+在目标 Google/Xiaomi 的同一 kernel build 中接入 `third_party/v4l2loopback`，并将
 模块加入该树实际使用的 vendor ramdisk/vendor_dlkm 构建与签名流程。不要复制其他设备 `.ko`。
 
 ```bash
