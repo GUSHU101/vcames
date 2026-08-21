@@ -8,13 +8,34 @@
 
 namespace vcames {
 
-// Versioned, latest-frame shared-memory transport between vcamesd and a
-// build-specific Camera HAL adapter. The producer owns the mapping and passes
-// a duplicate of the memfd over SCM_RIGHTS.
+// Versioned latest-frame shared-memory transport between vcamesd and an
+// exact-build Camera HAL adapter. The producer passes a duplicate memfd over
+// SCM_RIGHTS; a reader must validate every public header field before mapping.
 class SharedFrameBus {
 public:
-    static constexpr uint32_t kVersion = 1;
-    static constexpr uint32_t kSlotCount = 3;
+    enum class PixelFormat : uint32_t {
+        kJpeg = 1,
+        kNv21 = 2,
+        kNv12 = 3,
+        kI420 = 4,
+        kRgba8888 = 5,
+    };
+
+    struct Frame {
+        std::vector<uint8_t> payload;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t y_stride = 0;
+        uint32_t uv_stride = 0;
+        PixelFormat format = PixelFormat::kJpeg;
+        uint32_t rotation = 0;
+        uint32_t flags = 0;
+        int64_t presentation_time_ns = 0;
+        int64_t arrival_time_ns = 0;
+    };
+
+    static constexpr uint32_t kVersion = 2;
+    static constexpr uint32_t kSlotCount = 4;
     static constexpr size_t kDefaultSlotCapacity = 16 * 1024 * 1024;
 
     SharedFrameBus() = default;
@@ -24,6 +45,7 @@ public:
 
     bool Open(size_t slot_capacity, std::string* error);
     void Close();
+    bool Publish(const Frame& frame, std::string* error);
     bool PublishJpeg(
             const std::vector<uint8_t>& jpeg,
             int width,
@@ -36,9 +58,9 @@ public:
     std::string Descriptor() const;
     bool is_open() const { return mapping_ != nullptr; }
 
-    // Used by host tests and diagnostic readers. Camera adapters should map
-    // the received fd using the public wire layout below.
-    bool CopyLatest(std::vector<uint8_t>* jpeg, uint64_t* sequence, std::string* error) const;
+    // Used by tests and diagnostic readers. Production adapters map the
+    // received fd and consume the public wire layout below directly.
+    bool CopyLatest(Frame* frame, uint64_t* sequence, std::string* error) const;
 
     struct SlotHeader {
         uint64_t write_epoch;
@@ -49,8 +71,10 @@ public:
         uint32_t width;
         uint32_t height;
         uint32_t format;
+        uint32_t y_stride;
+        uint32_t uv_stride;
+        uint32_t rotation;
         uint32_t flags;
-        uint32_t reserved;
     };
 
     struct BusHeader {

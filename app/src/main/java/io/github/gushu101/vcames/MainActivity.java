@@ -1,11 +1,14 @@
 package io.github.gushu101.vcames;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
@@ -31,6 +34,7 @@ public final class MainActivity extends Activity {
     private static final long STATUS_INTERVAL_MS = 1000;
     private static final int PICK_VIDEO_REQUEST = 1001;
     private static final int EXPORT_DIAGNOSTICS_REQUEST = 1002;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 1003;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final DeploymentBridge deploymentBridge = DeploymentBridge.create();
@@ -84,6 +88,13 @@ public final class MainActivity extends Activity {
         populate(VCamConfig.load(this));
         localMediaUri = VCamConfig.loadLocalUri(this);
         updateLocalMediaLabel();
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    NOTIFICATION_PERMISSION_REQUEST);
+        }
     }
 
     @Override
@@ -117,14 +128,14 @@ public final class MainActivity extends Activity {
         scroll.addView(root, matchWrap());
 
         TextView title = new TextView(this);
-        title.setText("VCamES 2.0 · System Camera");
+        title.setText("VCamES 2.1 · System Camera");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(13, 27, 42));
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Pixel 4–6 · Android 11–15 · FrameBus / V4L2 · 无 Xposed");
+        subtitle.setText("Google / 小米 / 三星 · Android 11–13 · ROOT · 无 Xposed");
         subtitle.setTextSize(14);
         subtitle.setTextColor(Color.DKGRAY);
         subtitle.setPadding(0, dp(4), 0, dp(16));
@@ -237,9 +248,9 @@ public final class MainActivity extends Activity {
         root.addView(actions, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("“外置相机”使用 AOSP external/0 Provider。前置/后置通过共享 FrameBus"
-                + "向精确系统构建的 Camera HAL 适配器供帧；缺少或不匹配时 vcamesd 会拒绝启动，"
-                + "不会盲目 hook cameraserver。控制 APK 必须配合 ROM 集成或 Root Bridge。");
+        note.setText("“外置相机”使用 AOSP external/0 Provider。前置/后置保留 OEM camera ID"
+                + "和 metadata，通过共享 FrameBus 向精确固件适配器供帧。适配器必须同时匹配"
+                + "厂商、SoC、HIDL/AIDL 实测结果和完整系统哈希；不匹配时拒绝启动并保留原相机。");
         note.setTextSize(13);
         note.setTextColor(Color.DKGRAY);
         note.setPadding(0, dp(16), 0, 0);
@@ -341,7 +352,7 @@ public final class MainActivity extends Activity {
     private void exportDiagnostics() {
         deploymentView.setText(R.string.diagnostics_collecting);
         ioExecutor.execute(() -> {
-            pendingDiagnostics = "VCamES 2.0 compatibility report\n"
+            pendingDiagnostics = "VCamES 2.1 compatibility report\n"
                     + "generated_at_ms=" + System.currentTimeMillis() + "\n\n"
                     + DeviceProfiler.collect(this) + "\n\n"
                     + deploymentBridge.diagnostics(this) + "\n";

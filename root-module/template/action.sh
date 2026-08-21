@@ -3,6 +3,8 @@
 STATE_DIR="/data/adb/vcames"
 echo "VCamES Root Bridge"
 echo "设备: $(getprop ro.product.model) ($(getprop ro.product.device))"
+echo "厂商: $(getprop ro.product.manufacturer) / $(getprop ro.product.brand)"
+echo "SoC: $(getprop ro.soc.manufacturer) $(getprop ro.soc.model) / $(getprop ro.board.platform)"
 echo "Android: $(getprop ro.build.version.release) / API $(getprop ro.build.version.sdk)"
 echo "Kernel: $(uname -r)"
 echo "SELinux: $(getenforce)"
@@ -28,9 +30,9 @@ if [ -f "$STATE_DIR/disable-replacement" ]; then
 else
   echo "BootGuard: 正常"
 fi
-[ ! -f "$STATE_DIR/last-known-good.properties" ] || {
-  echo "Last known good:"
-  sed 's/^/  /' "$STATE_DIR/last-known-good.properties"
+[ ! -f "$STATE_DIR/process-stable.properties" ] || {
+  echo "进程稳定记录（不代表相机内容已验证）："
+  sed 's/^/  /' "$STATE_DIR/process-stable.properties"
 }
 
 echo "video100:"
@@ -44,7 +46,7 @@ provider="$(lshal 2>/dev/null | grep 'camera.provider.*external/0')"
 echo
 echo "Front/back replacement adapter:"
 if [ -x "${0%/*}/bin/vcames-camera-adapter" ]; then
-  echo "  已安装（完整构建哈希校验 + memfd FrameBus）"
+  echo "  已安装并通过构建哈希门禁；实际附着状态以 daemon replacement_attached 为准"
 else
   echo "  未安装；仅可使用 external/0"
 fi

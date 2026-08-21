@@ -110,6 +110,41 @@ uint8_t SampleChannel(
     return static_cast<uint8_t>(std::clamp(top + (bottom - top) * fy, 0.0f, 255.0f));
 }
 
+uint8_t ClampByte(int value) {
+    return static_cast<uint8_t>(std::clamp(value, 0, 255));
+}
+
+SourceCoordinate MapOutputToSource(
+        int output_x,
+        int output_y,
+        int output_width,
+        int output_height,
+        int source_width,
+        int source_height,
+        int rotation,
+        bool mirror) {
+    const int oriented_width = (rotation == 90 || rotation == 270)
+            ? source_height
+            : source_width;
+    const int oriented_height = (rotation == 90 || rotation == 270)
+            ? source_width
+            : source_height;
+    const float scale = std::max(
+            static_cast<float>(output_width) / static_cast<float>(oriented_width),
+            static_cast<float>(output_height) / static_cast<float>(oriented_height));
+    float oriented_x = (static_cast<float>(output_x) + 0.5f
+            - static_cast<float>(output_width) * 0.5f) / scale
+            + static_cast<float>(oriented_width) * 0.5f - 0.5f;
+    const float oriented_y = (static_cast<float>(output_y) + 0.5f
+            - static_cast<float>(output_height) * 0.5f) / scale
+            + static_cast<float>(oriented_height) * 0.5f - 0.5f;
+    if (mirror) {
+        oriented_x = static_cast<float>(oriented_width - 1) - oriented_x;
+    }
+    return InvertOrientation(
+            oriented_x, oriented_y, source_width, source_height, rotation);
+}
+
 }  // namespace
 
 bool CreateSolidJpeg(
@@ -230,6 +265,18 @@ bool TransformJpeg(
         }
         return false;
     }
+    int declared_width = 0;
+    int declared_height = 0;
+    if (!ReadJpegDimensions(
+                input, &declared_width, &declared_height, error)
+            || declared_width > 3840 || declared_height > 2160
+            || static_cast<size_t>(declared_width)
+                    * static_cast<size_t>(declared_height) > 3840u * 2160u) {
+        if (error != nullptr && declared_width > 0 && declared_height > 0) {
+            *error = "JPEG dimensions exceed the decode safety limit";
+        }
+        return false;
+    }
     int decoded_width = 0;
     int decoded_height = 0;
     int components = 0;
@@ -329,6 +376,244 @@ bool TransformJpeg(
         output->clear();
         if (error != nullptr) {
             *error = "JPEG encode failed";
+        }
+        return false;
+    }
+    return true;
+}
+
+bool TransformJpegToNv21(
+        const std::vector<uint8_t>& input,
+        const TransformOptions& options,
+        std::vector<uint8_t>* output,
+        int* source_width,
+        int* source_height,
+        std::string* error) {
+    if (output == nullptr || options.width <= 0 || options.height <= 0
+            || (options.width & 1) != 0 || (options.height & 1) != 0
+            || (options.rotation != 0 && options.rotation != 90
+                && options.rotation != 180 && options.rotation != 270)) {
+        if (error != nullptr) {
+            *error = "invalid JPEG to NV21 transform parameters";
+        }
+        return false;
+    }
+    if (input.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        if (error != nullptr) {
+            *error = "JPEG frame is too large to decode";
+        }
+        return false;
+    }
+    int declared_width = 0;
+    int declared_height = 0;
+    if (!ReadJpegDimensions(
+                input, &declared_width, &declared_height, error)
+            || declared_width > 3840 || declared_height > 2160
+            || static_cast<size_t>(declared_width)
+                    * static_cast<size_t>(declared_height) > 3840u * 2160u) {
+        if (error != nullptr && declared_width > 0 && declared_height > 0) {
+            *error = "JPEG dimensions exceed the decode safety limit";
+        }
+        return false;
+    }
+
+    int decoded_width = 0;
+    int decoded_height = 0;
+    int components = 0;
+    stbi_uc* decoded = stbi_load_from_memory(
+            input.data(), static_cast<int>(input.size()),
+            &decoded_width, &decoded_height, &components, 3);
+    if (decoded == nullptr || decoded_width != declared_width
+            || decoded_height != declared_height) {
+        if (error != nullptr) {
+            const char* reason = stbi_failure_reason();
+            *error = std::string("JPEG decode failed") + (reason == nullptr ? "" : ": ")
+                    + (reason == nullptr ? "" : reason);
+        }
+        if (decoded != nullptr) {
+            stbi_image_free(decoded);
+        }
+        return false;
+    }
+    if (source_width != nullptr) {
+        *source_width = decoded_width;
+    }
+    if (source_height != nullptr) {
+        *source_height = decoded_height;
+    }
+
+    const size_t output_pixels = static_cast<size_t>(options.width)
+            * static_cast<size_t>(options.height);
+    output->assign(output_pixels * 3 / 2, 0);
+    for (int y = 0; y < options.height; ++y) {
+        for (int x = 0; x < options.width; ++x) {
+            const SourceCoordinate source = MapOutputToSource(
+                    x, y, options.width, options.height,
+                    decoded_width, decoded_height, options.rotation, options.mirror);
+            const int red = SampleChannel(
+                    decoded, decoded_width, decoded_height, source.x, source.y, 0);
+            const int green = SampleChannel(
+                    decoded, decoded_width, decoded_height, source.x, source.y, 1);
+            const int blue = SampleChannel(
+                    decoded, decoded_width, decoded_height, source.x, source.y, 2);
+            (*output)[static_cast<size_t>(y) * options.width + x] = ClampByte(
+                    ((66 * red + 129 * green + 25 * blue + 128) >> 8) + 16);
+        }
+    }
+    for (int y = 0; y < options.height; y += 2) {
+        for (int x = 0; x < options.width; x += 2) {
+            int u_total = 0;
+            int v_total = 0;
+            for (int row = 0; row < 2; ++row) {
+                for (int column = 0; column < 2; ++column) {
+                    const SourceCoordinate source = MapOutputToSource(
+                            x + column, y + row, options.width, options.height,
+                            decoded_width, decoded_height,
+                            options.rotation, options.mirror);
+                    const int red = SampleChannel(
+                            decoded, decoded_width, decoded_height,
+                            source.x, source.y, 0);
+                    const int green = SampleChannel(
+                            decoded, decoded_width, decoded_height,
+                            source.x, source.y, 1);
+                    const int blue = SampleChannel(
+                            decoded, decoded_width, decoded_height,
+                            source.x, source.y, 2);
+                    u_total += ((-38 * red - 74 * green + 112 * blue + 128) >> 8) + 128;
+                    v_total += ((112 * red - 94 * green - 18 * blue + 128) >> 8) + 128;
+                }
+            }
+            const size_t chroma = output_pixels
+                    + static_cast<size_t>(y / 2) * options.width + x;
+            (*output)[chroma] = ClampByte(v_total / 4);
+            (*output)[chroma + 1] = ClampByte(u_total / 4);
+        }
+    }
+    stbi_image_free(decoded);
+    return true;
+}
+
+bool TransformNv21(
+        const std::vector<uint8_t>& input,
+        int source_width,
+        int source_height,
+        const TransformOptions& options,
+        std::vector<uint8_t>* output,
+        std::string* error) {
+    if (output == nullptr || source_width <= 0 || source_height <= 0
+            || options.width <= 0 || options.height <= 0
+            || (source_width & 1) != 0 || (source_height & 1) != 0
+            || (options.width & 1) != 0 || (options.height & 1) != 0) {
+        if (error != nullptr) {
+            *error = "NV21 dimensions must be positive and even";
+        }
+        return false;
+    }
+    const size_t source_pixels = static_cast<size_t>(source_width)
+            * static_cast<size_t>(source_height);
+    if (source_pixels > 3840u * 2160u || input.size() != source_pixels * 3 / 2) {
+        if (error != nullptr) {
+            *error = "NV21 payload size does not match its dimensions";
+        }
+        return false;
+    }
+    if (options.rotation != 0 && options.rotation != 90
+            && options.rotation != 180 && options.rotation != 270) {
+        if (error != nullptr) {
+            *error = "NV21 rotation is invalid";
+        }
+        return false;
+    }
+    if (options.rotation == 0 && !options.mirror
+            && options.width == source_width && options.height == source_height) {
+        *output = input;
+        return true;
+    }
+
+    const size_t output_pixels = static_cast<size_t>(options.width)
+            * static_cast<size_t>(options.height);
+    output->assign(output_pixels * 3 / 2, 0);
+    for (int y = 0; y < options.height; ++y) {
+        for (int x = 0; x < options.width; ++x) {
+            SourceCoordinate source = MapOutputToSource(
+                    x, y, options.width, options.height,
+                    source_width, source_height, options.rotation, options.mirror);
+            const int source_x = std::clamp(
+                    static_cast<int>(std::lround(source.x)), 0, source_width - 1);
+            const int source_y = std::clamp(
+                    static_cast<int>(std::lround(source.y)), 0, source_height - 1);
+            (*output)[static_cast<size_t>(y) * options.width + x] =
+                    input[static_cast<size_t>(source_y) * source_width + source_x];
+        }
+    }
+
+    const size_t output_chroma = output_pixels;
+    const size_t source_chroma = source_pixels;
+    for (int y = 0; y < options.height / 2; ++y) {
+        for (int x = 0; x < options.width / 2; ++x) {
+            SourceCoordinate source = MapOutputToSource(
+                    x * 2, y * 2, options.width, options.height,
+                    source_width, source_height, options.rotation, options.mirror);
+            int source_x = std::clamp(
+                    static_cast<int>(std::lround(source.x)), 0, source_width - 2);
+            int source_y = std::clamp(
+                    static_cast<int>(std::lround(source.y)), 0, source_height - 2);
+            source_x &= ~1;
+            source_y &= ~1;
+            const size_t source_offset = source_chroma
+                    + static_cast<size_t>(source_y / 2) * source_width + source_x;
+            const size_t output_offset = output_chroma
+                    + static_cast<size_t>(y) * options.width + x * 2;
+            (*output)[output_offset] = input[source_offset];
+            (*output)[output_offset + 1] = input[source_offset + 1];
+        }
+    }
+    return true;
+}
+
+bool Nv21ToJpeg(
+        const std::vector<uint8_t>& input,
+        int width,
+        int height,
+        int quality,
+        std::vector<uint8_t>* output,
+        std::string* error) {
+    if (output == nullptr || width <= 0 || height <= 0
+            || (width & 1) != 0 || (height & 1) != 0
+            || quality < 1 || quality > 100) {
+        if (error != nullptr) {
+            *error = "invalid NV21 JPEG parameters";
+        }
+        return false;
+    }
+    const size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (pixels > 3840u * 2160u || input.size() != pixels * 3 / 2) {
+        if (error != nullptr) {
+            *error = "NV21 JPEG payload size mismatch";
+        }
+        return false;
+    }
+    std::vector<uint8_t> rgb(pixels * 3);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const int luma = input[static_cast<size_t>(y) * width + x];
+            const size_t chroma = pixels + static_cast<size_t>(y / 2) * width + (x & ~1);
+            const int v = static_cast<int>(input[chroma]) - 128;
+            const int u = static_cast<int>(input[chroma + 1]) - 128;
+            const int c = std::max(0, luma - 16);
+            const size_t offset = (static_cast<size_t>(y) * width + x) * 3;
+            rgb[offset] = ClampByte((298 * c + 409 * v + 128) >> 8);
+            rgb[offset + 1] = ClampByte((298 * c - 100 * u - 208 * v + 128) >> 8);
+            rgb[offset + 2] = ClampByte((298 * c + 516 * u + 128) >> 8);
+        }
+    }
+    output->clear();
+    output->reserve(std::max<size_t>(64 * 1024, pixels / 2));
+    if (stbi_write_jpg_to_func(
+                WriteToVector, output, width, height, 3, rgb.data(), quality) == 0) {
+        output->clear();
+        if (error != nullptr) {
+            *error = "NV21 JPEG encode failed";
         }
         return false;
     }

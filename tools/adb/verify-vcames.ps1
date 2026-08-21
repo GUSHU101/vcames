@@ -19,6 +19,8 @@ if ($LASTEXITCODE -ne 0) { throw '没有可用的 ADB 设备。' }
 
 $model = Invoke-AdbShell 'getprop ro.product.model'
 $device = Invoke-AdbShell 'getprop ro.product.device'
+$manufacturer = Invoke-AdbShell 'getprop ro.product.manufacturer'
+$brand = Invoke-AdbShell 'getprop ro.product.brand'
 $apiText = Invoke-AdbShell 'getprop ro.build.version.sdk'
 $release = Invoke-AdbShell 'getprop ro.build.version.release'
 $kernel = Invoke-AdbShell 'uname -r'
@@ -33,9 +35,11 @@ $denials = Invoke-AdbShell 'logcat -b all -d 2>/dev/null | grep "avc:  denied" |
 
 $api = 0
 [void][int]::TryParse($apiText, [ref]$api)
+$vendorIdentity = "$manufacturer|$brand".ToLowerInvariant()
+$supportedVendor = $vendorIdentity -match 'google|xiaomi|redmi|poco|samsung'
 $checks = [ordered]@{
-    'Pixel 4-6' = $model -match 'Pixel (4|5|6)'
-    'API 30-35' = $api -ge 30 -and $api -le 35
+    'Google/Xiaomi/Samsung' = $supportedVendor
+    'API 30-33' = $api -ge 30 -and $api -le 33
     'SELinux enforcing' = $enforcing -eq 'Enforcing'
     'vcamesd running' = $service -eq 'running'
     '/dev/video100' = -not [string]::IsNullOrWhiteSpace($node)
@@ -45,7 +49,7 @@ $checks = [ordered]@{
     'no related AVC denial' = [string]::IsNullOrWhiteSpace($denials)
 }
 
-Write-Host "设备：$model ($device) · Android $release / API $api · kernel $kernel"
+Write-Host "设备：$manufacturer $model ($device) · Android $release / API $api · kernel $kernel"
 foreach ($entry in $checks.GetEnumerator()) {
     $mark = if ($entry.Value) { '[PASS]' } else { '[FAIL]' }
     Write-Host "$mark $($entry.Key)"

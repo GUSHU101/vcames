@@ -18,16 +18,18 @@ int main() {
         std::cerr << error << '\n';
         return 1;
     }
-    std::vector<uint8_t> actual;
+    vcames::SharedFrameBus::Frame actual;
     uint64_t sequence = 0;
-    if (!bus.CopyLatest(&actual, &sequence, &error) || actual != expected || sequence != 1) {
+    if (!bus.CopyLatest(&actual, &sequence, &error)
+            || actual.payload != expected || sequence != 1
+            || actual.format != vcames::SharedFrameBus::PixelFormat::kJpeg) {
         std::cerr << "first frame mismatch: " << error << '\n';
         return 1;
     }
     expected = {0xff, 0xd8, 9, 8, 7, 0xff, 0xd9};
     if (!bus.PublishJpeg(expected, 1280, 720, 789, 999, &error)
             || !bus.CopyLatest(&actual, &sequence, &error)
-            || actual != expected || sequence != 2) {
+            || actual.payload != expected || sequence != 2) {
         std::cerr << "latest frame mismatch: " << error << '\n';
         return 1;
     }
@@ -36,9 +38,26 @@ int main() {
         std::cerr << "invalidated bus still returned a frame\n";
         return 1;
     }
-    if (!bus.PublishJpeg(expected, 1280, 720, 1000, 1100, &error)
-            || !bus.CopyLatest(&actual, &sequence, &error) || sequence != 3) {
+    vcames::SharedFrameBus::Frame raw;
+    raw.width = 4;
+    raw.height = 2;
+    raw.y_stride = 4;
+    raw.uv_stride = 4;
+    raw.format = vcames::SharedFrameBus::PixelFormat::kNv21;
+    raw.presentation_time_ns = 1000;
+    raw.arrival_time_ns = 1100;
+    raw.payload = {16, 16, 16, 16, 16, 16, 16, 16, 128, 128, 128, 128};
+    if (!bus.Publish(raw, &error)
+            || !bus.CopyLatest(&actual, &sequence, &error) || sequence != 3
+            || actual.payload != raw.payload
+            || actual.format != vcames::SharedFrameBus::PixelFormat::kNv21
+            || actual.y_stride != 4 || actual.uv_stride != 4) {
         std::cerr << "sequence did not remain monotonic after invalidation\n";
+        return 1;
+    }
+    raw.payload.pop_back();
+    if (bus.Publish(raw, &error)) {
+        std::cerr << "FrameBus accepted a truncated NV21 payload\n";
         return 1;
     }
     int duplicate = bus.DuplicateFd(&error);

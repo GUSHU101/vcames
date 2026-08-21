@@ -7,38 +7,110 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.Locale;
-import java.util.Set;
 
-/** Conservative capability classification; it never treats a model name as verification. */
+/** Candidate classification only; exact-build hashes and device self-tests remain mandatory. */
 final class CompatibilityEngine {
-    private static final Set<String> PIXEL_4_TO_6 = new HashSet<>(Arrays.asList(
-            "flame", "coral", "sunfish", "bramble", "redfin", "barbet",
-            "oriole", "raven", "bluejay"));
+    static final int MIN_API = 30;
+    static final int MAX_API = 33;
 
     private CompatibilityEngine() {}
 
     static JSONObject evaluate() throws JSONException {
         JSONObject result = new JSONObject();
         JSONArray blockers = new JSONArray();
-        boolean apiSupported = Build.VERSION.SDK_INT <= 35;
+        JSONArray warnings = new JSONArray();
+        int api = Build.VERSION.SDK_INT;
+        String vendorFamily = vendorFamily(Build.MANUFACTURER, Build.BRAND);
+        String socFamily = socFamily();
+        boolean apiSupported = api >= MIN_API && api <= MAX_API;
         boolean arm64 = Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a");
-        boolean targetPixel = "google".equals(Build.MANUFACTURER.toLowerCase(Locale.US))
-                && PIXEL_4_TO_6.contains(Build.DEVICE);
+        boolean vendorSupported = !"unsupported".equals(vendorFamily);
+
         if (!apiSupported) {
-            blockers.put("API 必须位于 30–35（Android 11–15）");
+            blockers.put("仅支持 API 30–33（Android 11–13）");
         }
         if (!arm64) {
-            blockers.put("当前工程只构建 arm64-v8a 系统组件");
+            blockers.put("第一阶段系统组件只构建 arm64-v8a");
         }
-        if (!targetPixel) {
-            blockers.put("当前验收矩阵仅覆盖 Pixel 4–6；其他厂商需要独立设备适配包");
+        if (!vendorSupported) {
+            blockers.put("仅接受 Google、Xiaomi/Redmi/POCO、Samsung 设备");
         }
-        result.put("external_candidate", apiSupported && arm64 && targetPixel);
-        result.put("replacement_state", "ADAPTER_REQUIRED");
-        result.put("verification", "UNVERIFIED_UNTIL_DEVICE_SELF_TEST");
+        if ("unknown".equals(socFamily)) {
+            warnings.put("应用沙箱无法确认 SoC family；打包 replacement 前必须导出 ROOT 完整画像");
+        }
+
+        String strategy = strategyFamily(vendorFamily, socFamily);
+        boolean candidate = apiSupported && arm64 && vendorSupported;
+        result.put("vendor_family", vendorFamily);
+        result.put("soc_family", socFamily);
+        result.put("strategy_family", strategy);
+        result.put("camera_interface", "REQUIRES_ROOT_VINTF_SERVICE_PROBE");
+        result.put("external_candidate", candidate);
+        result.put("replacement_candidate", candidate);
+        result.put("replacement_state", candidate
+                ? "EXACT_BUILD_ADAPTER_REQUIRED"
+                : "UNSUPPORTED_OR_PROFILE_INCOMPLETE");
+        result.put("verification", "UNVERIFIED_UNTIL_CONTENT_AND_STRESS_TEST");
         result.put("blockers", blockers);
+        result.put("warnings", warnings);
         return result;
+    }
+
+    static String vendorFamily(String manufacturer, String brand) {
+        String joined = ((manufacturer == null ? "" : manufacturer) + "|"
+                + (brand == null ? "" : brand)).toLowerCase(Locale.US);
+        if (joined.contains("google")) {
+            return "google";
+        }
+        if (joined.contains("xiaomi") || joined.contains("redmi")
+                || joined.contains("poco")) {
+            return "xiaomi";
+        }
+        if (joined.contains("samsung")) {
+            return "samsung";
+        }
+        return "unsupported";
+    }
+
+    static String socFamily() {
+        String socManufacturer = "";
+        String socModel = "";
+        if (Build.VERSION.SDK_INT >= 31) {
+            socManufacturer = Build.SOC_MANUFACTURER;
+            socModel = Build.SOC_MODEL;
+        }
+        String identity = (socManufacturer + "|" + socModel + "|" + Build.HARDWARE
+                + "|" + Build.BOARD).toLowerCase(Locale.US);
+        if (identity.contains("tensor") || identity.contains("gs101")
+                || identity.contains("gs201")) {
+            return "tensor";
+        }
+        if (identity.contains("qualcomm") || identity.contains("snapdragon")
+                || identity.contains("qcom") || identity.contains("msm")
+                || identity.matches(".*\\bsm[0-9]{3,4}.*")) {
+            return "qualcomm";
+        }
+        if (identity.contains("exynos")) {
+            return "exynos";
+        }
+        if (identity.contains("mediatek") || identity.contains("mtk")
+                || identity.matches(".*\\bmt[0-9]{4}.*")) {
+            return "mediatek";
+        }
+        return "unknown";
+    }
+
+    private static String strategyFamily(String vendor, String soc) {
+        if ("qualcomm".equals(soc)) {
+            return vendor + "-qualcomm-provider-probe";
+        }
+        if ("google".equals(vendor) && "tensor".equals(soc)) {
+            return "google-tensor-provider-probe";
+        }
+        if ("samsung".equals(vendor) && "exynos".equals(soc)) {
+            return "samsung-exynos-provider-probe";
+        }
+        return vendor + "-" + soc + "-provider-probe";
     }
 }

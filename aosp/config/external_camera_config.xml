@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Reserve /dev/video100 for VCamES. Pixel camera stacks expose a number of
+  Reserve /dev/video100 for VCamES. OEM camera stacks expose a number of
   internal V4L2 nodes; 0-99 are excluded so the generic provider cannot claim
   a physical ISP node by mistake.
 -->

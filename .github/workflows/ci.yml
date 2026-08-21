@@ -29,14 +29,17 @@ jobs:
           ./gradlew --no-daemon
           :app:assembleSystemDebug :app:assembleRootDebug
           :app:lintSystemDebug :app:lintRootDebug
-      - name: Build arm64 Root Bridge module
+      - name: Build API 30 and API 33 arm64 Root Bridge modules
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           ./tools/root/build-root-module.sh 30
+          ./tools/root/build-root-module.sh 33
           unzip -t out/root/VCamES-Root-API30.zip
+          unzip -t out/root/VCamES-Root-API33.zip
           unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx module.prop
           unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx controller.apk
           unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx bin/vcamesd
+          unzip -Z1 out/root/VCamES-Root-API33.zip | grep -Fx bin/vcamesd
           unzip -Z1 out/root/VCamES-Root-standalone.apk | grep -Fx assets/vcames-root-bridge.zip
       - uses: actions/upload-artifact@v7
         with:
@@ -47,6 +50,7 @@ jobs:
           name: vcames-root-bridge
           path: |
             out/root/VCamES-Root-API30.zip
+            out/root/VCamES-Root-API33.zip
             out/root/VCamES-Root-controller.apk
             out/root/VCamES-Root-standalone.apk
 

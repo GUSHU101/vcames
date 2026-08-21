@@ -7,8 +7,9 @@
 namespace vcames {
 
 // Front/back replacement is supplied by a device-build-specific Camera HAL
-// adapter. The generic daemon only activates it through this narrow protocol;
-// it never guesses private cameraserver symbols or disables SELinux.
+// adapter. The generic daemon uses a phased GET_INFO -> PROBE -> ATTACH_BUS ->
+// ACTIVATE -> HEALTH protocol; it never guesses private cameraserver symbols
+// or disables SELinux.
 bool ActivateReplacementAdapter(
         const Config& config,
         int frame_bus_fd,

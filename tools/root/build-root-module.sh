@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API="${1:-35}"
-case "$API" in 30|31|32|33|34|35) ;; *) echo "API must be between 30 and 35" >&2; exit 64 ;; esac
+API="${1:-33}"
+case "$API" in 30|31|32|33) ;; *) echo "API must be between 30 and 33" >&2; exit 64 ;; esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="$ROOT_DIR/out/root"
@@ -43,6 +43,36 @@ fi
 if [[ -n "${VCAMES_REPLACEMENT_ADAPTER:-}" ]]; then
   [[ -n "${VCAMES_COMPATIBILITY_MANIFEST:-}" ]] || {
     echo "Set VCAMES_COMPATIBILITY_MANIFEST with VCAMES_REPLACEMENT_ADAPTER" >&2
+    exit 64
+  }
+  for field in schema vendor_family soc_family camera_hal_transport manufacturer product device api \
+      system_fingerprint_sha256 vendor_fingerprint_sha256 cameraserver_sha256 \
+      camera_provider_sha256 vendor_camera_libraries_sha256 graphics_stack_sha256 \
+      adapter_sha256 compatibility_id; do
+    grep -q "^${field}=" "$VCAMES_COMPATIBILITY_MANIFEST" || {
+      echo "Compatibility manifest missing: $field" >&2
+      exit 64
+    }
+  done
+  manifest_vendor="$(sed -n 's/^vendor_family=//p' "$VCAMES_COMPATIBILITY_MANIFEST" | head -n 1)"
+  case "$manifest_vendor" in google|xiaomi|samsung) ;; *)
+    echo "Unsupported vendor_family: $manifest_vendor" >&2; exit 64 ;;
+  esac
+  manifest_api="$(sed -n 's/^api=//p' "$VCAMES_COMPATIBILITY_MANIFEST" | head -n 1)"
+  [[ "$manifest_api" == "$API" ]] || {
+    echo "Build API $API does not match manifest API $manifest_api" >&2
+    exit 64
+  }
+  manifest_schema="$(sed -n 's/^schema=//p' "$VCAMES_COMPATIBILITY_MANIFEST" | head -n 1)"
+  [[ "$manifest_schema" == "2" ]] || {
+    echo "Compatibility manifest schema must be 2" >&2
+    exit 64
+  }
+  manifest_adapter_hash="$(sed -n 's/^adapter_sha256=//p' \
+    "$VCAMES_COMPATIBILITY_MANIFEST" | head -n 1 | tr '[:upper:]' '[:lower:]')"
+  actual_adapter_hash="$(sha256sum "$VCAMES_REPLACEMENT_ADAPTER" | cut -d' ' -f1)"
+  [[ "$manifest_adapter_hash" == "$actual_adapter_hash" ]] || {
+    echo "Compatibility manifest adapter_sha256 does not match adapter" >&2
     exit 64
   }
   cp "$VCAMES_REPLACEMENT_ADAPTER" "$STAGE/bin/vcames-camera-adapter"

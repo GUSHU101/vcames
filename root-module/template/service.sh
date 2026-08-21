@@ -6,7 +6,7 @@ LOG_FILE="$STATE_DIR/root-service.log"
 STATUS_FILE="$STATE_DIR/status.txt"
 SAFE_MODE_FILE="$STATE_DIR/disable-replacement"
 FAILURE_FILE="$STATE_DIR/replacement-failures"
-LKG_FILE="$STATE_DIR/last-known-good.properties"
+STABLE_FILE="$STATE_DIR/process-stable.properties"
 PACKAGE="io.github.gushu101.vcames"
 adapter_pid=""
 daemon_pid=""
@@ -23,8 +23,8 @@ mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
 exec >>"$LOG_FILE" 2>&1
 
-echo "=== VCamES Root Bridge 2.0.0 $(date) ==="
-echo "device=$(getprop ro.product.device) api=$(getprop ro.build.version.sdk) kernel=$(uname -r)"
+echo "=== VCamES Root Bridge 2.1.0 $(date) ==="
+echo "manufacturer=$(getprop ro.product.manufacturer) brand=$(getprop ro.product.brand) device=$(getprop ro.product.device) api=$(getprop ro.build.version.sdk) kernel=$(uname -r)"
 
 write_status() {
   echo "$1" >"$STATUS_FILE"
@@ -108,7 +108,9 @@ echo "controller_uid=$app_uid"
 
 if [ "$adapter_available" = true ]; then
   echo "starting exact-build front/back adapter with memfd FrameBus protocol"
-  "$MODDIR/bin/vcames-camera-adapter" --serve --socket vcames-camera-adapter &
+  "$MODDIR/bin/vcames-camera-adapter" --serve \
+    --socket vcames-camera-adapter \
+    --manifest "$MODDIR/compatibility.properties" &
   adapter_pid=$!
   sleep 2
   if ! kill -0 "$adapter_pid" 2>/dev/null; then
@@ -122,7 +124,7 @@ if [ "$adapter_available" = true ]; then
   fi
 fi
 
-"$MODDIR/bin/vcamesd" --allowed-uid "$app_uid" &
+"$MODDIR/bin/vcamesd" --allowed-uid "$app_uid" --drop-to-system &
 daemon_pid=$!
 sleep 2
 if ! kill -0 "$daemon_pid" 2>/dev/null; then
@@ -165,15 +167,15 @@ fi
 if [ -f "$SAFE_MODE_FILE" ] && [ "$external_ready" = true ]; then
   write_status "READY_EXTERNAL_SAFE_MODE_REPLACEMENT_DISABLED"
 elif [ -n "$adapter_pid" ] && [ "$external_ready" = true ]; then
-  write_status "READY_EXTERNAL_AND_REPLACEMENT_UNVERIFIED"
+  write_status "READY_EXTERNAL_ADAPTER_AVAILABLE_UNVERIFIED"
 elif [ -n "$adapter_pid" ]; then
-  write_status "READY_REPLACEMENT_UNVERIFIED"
+  write_status "ADAPTER_AVAILABLE_UNVERIFIED"
 else
   write_status "READY_EXTERNAL"
 fi
 
 stable_seconds=0
-lkg_recorded=false
+stable_recorded=false
 while kill -0 "$daemon_pid" 2>/dev/null; do
   sleep 5
   stable_seconds=$((stable_seconds + 5))
@@ -193,16 +195,17 @@ while kill -0 "$daemon_pid" 2>/dev/null; do
       write_status "REPLACEMENT_ADAPTER_CRASHED"
     fi
   fi
-  if [ "$stable_seconds" -ge 60 ] && [ "$lkg_recorded" = false ]; then
+  if [ "$stable_seconds" -ge 60 ] && [ "$stable_recorded" = false ]; then
     {
-      echo "version=2.0.0"
+      echo "version=2.1.0"
       echo "device=$(getprop ro.product.device)"
       echo "api=$(getprop ro.build.version.sdk)"
       echo "fingerprint_sha256=$(printf '%s' "$(getprop ro.build.fingerprint)" | sha256sum | cut -d' ' -f1)"
-    } >"$LKG_FILE"
-    chmod 0600 "$LKG_FILE"
+      echo "verification=unverified-process-stability-only"
+    } >"$STABLE_FILE"
+    chmod 0600 "$STABLE_FILE"
     [ -z "$adapter_pid" ] || echo 0 >"$FAILURE_FILE"
-    lkg_recorded=true
+    stable_recorded=true
   fi
 done
 write_status "DAEMON_STOPPED"

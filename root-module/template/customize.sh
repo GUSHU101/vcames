@@ -5,12 +5,12 @@ PROPFILE=false
 POSTFSDATA=false
 LATESTARTSERVICE=true
 
-ui_print "- VCamES Root Bridge 2.0.0"
+ui_print "- VCamES Root Bridge 2.1.0"
 
 api="$(getprop ro.build.version.sdk)"
 case "$api" in
-  30|31|32|33|34|35) ;;
-  *) abort "! 仅支持 Android 11-15（API 30-35），当前 API=$api" ;;
+  30|31|32|33) ;;
+  *) abort "! 仅支持 Android 11-13（API 30-33），当前 API=$api" ;;
 esac
 
 arch="$(getprop ro.product.cpu.abi)"
@@ -20,14 +20,26 @@ case "$arch" in
 esac
 
 manufacturer="$(getprop ro.product.manufacturer)"
+brand="$(getprop ro.product.brand)"
 device="$(getprop ro.product.device)"
-case "$device" in
-  flame|coral|sunfish|bramble|redfin|barbet|oriole|raven|bluejay) ;;
-  *) abort "! 当前验收矩阵仅覆盖 Pixel 4-6，设备代号=$device" ;;
+vendor_identity="$(printf '%s|%s' "$manufacturer" "$brand" | tr '[:upper:]' '[:lower:]')"
+case "$vendor_identity" in
+  *google*) vendor_family="google" ;;
+  *xiaomi*|*redmi*|*poco*) vendor_family="xiaomi" ;;
+  *samsung*) vendor_family="samsung" ;;
+  *) abort "! 仅支持 Google、小米/Redmi/POCO、Samsung，当前为 $manufacturer / $brand" ;;
 esac
-case "$manufacturer" in
-  Google|google) ;;
-  *) abort "! 设备制造商与 Pixel 适配包不匹配：$manufacturer" ;;
+
+soc_identity="$(printf '%s|%s|%s|%s' \
+  "$(getprop ro.soc.manufacturer)" "$(getprop ro.soc.model)" \
+  "$(getprop ro.board.platform)" "$(getprop ro.hardware)" | \
+  tr '[:upper:]' '[:lower:]')"
+case "$soc_identity" in
+  *tensor*|*gs101*|*gs201*) soc_family="tensor" ;;
+  *qualcomm*|*snapdragon*|*qcom*|*msm*|*sm[0-9][0-9][0-9]*) soc_family="qualcomm" ;;
+  *exynos*) soc_family="exynos" ;;
+  *mediatek*|*mtk*|*mt[0-9][0-9][0-9][0-9]*) soc_family="mediatek" ;;
+  *) soc_family="unknown" ;;
 esac
 
 [ -f "$MODPATH/bin/vcamesd" ] || abort "! 安装包缺少 bin/vcamesd"
@@ -52,11 +64,42 @@ aggregate_hash() {
   printf '%s' "$hashes" | sort | sha256sum | cut -d' ' -f1
 }
 
+camera_hal_transport() {
+  aidl=false
+  hidl=false
+  if service list 2>/dev/null | grep -q 'android.hardware.camera.provider.ICameraProvider'; then
+    aidl=true
+  fi
+  if lshal 2>/dev/null | grep -q 'camera.provider@'; then
+    hidl=true
+  fi
+  if grep -R -E 'format="aidl"|<fqname>ICameraProvider/' \
+      /vendor/etc/vintf/manifest* /vendor/etc/vintf/manifest/*.xml \
+      /system/etc/vintf/manifest* 2>/dev/null | grep -q 'camera.provider'; then
+    aidl=true
+  fi
+  if grep -R -E 'format="hidl"|camera.provider@[0-9]' \
+      /vendor/etc/vintf/manifest* /vendor/etc/vintf/manifest/*.xml \
+      /system/etc/vintf/manifest* 2>/dev/null | grep -q 'camera.provider'; then
+    hidl=true
+  fi
+  if [ "$aidl" = true ] && [ "$hidl" = true ]; then
+    printf 'mixed'
+  elif [ "$aidl" = true ]; then
+    printf 'aidl'
+  elif [ "$hidl" = true ]; then
+    printf 'hidl'
+  else
+    printf 'unknown'
+  fi
+}
+
 if [ -f "$MODPATH/bin/vcames-camera-adapter" ]; then
   [ -f "$MODPATH/compatibility.properties" ] || \
     abort "! 摄像头替换适配器缺少 compatibility.properties"
 
   actual_product="$(getprop ro.product.name)"
+  actual_hal_transport="$(camera_hal_transport)"
   actual_system_fingerprint="$(printf '%s' "$(getprop ro.build.fingerprint)" | sha256sum | cut -d' ' -f1)"
   actual_vendor_fingerprint="$(printf '%s' "$(getprop ro.vendor.build.fingerprint)" | sha256sum | cut -d' ' -f1)"
   actual_cameraserver="$(sha256sum /system/bin/cameraserver 2>/dev/null | cut -d' ' -f1)"
@@ -64,16 +107,27 @@ if [ -f "$MODPATH/bin/vcames-camera-adapter" ]; then
     /vendor/bin/hw/*camera*provider* \
     /vendor/lib64/hw/*camera*provider* \
     /vendor/lib64/*camera*provider*)"
+  actual_vendor_camera="$(aggregate_hash \
+    /vendor/bin/hw/*camera* /vendor/lib64/hw/*camera* \
+    /vendor/lib64/*camera*.so /vendor/lib64/*camera*/*)"
   actual_graphics="$(aggregate_hash \
     /vendor/lib64/hw/*mapper* /vendor/lib64/hw/*allocator* \
     /vendor/lib64/*mapper* /vendor/lib64/*allocator*)"
   actual_adapter="$(sha256sum "$MODPATH/bin/vcames-camera-adapter" | cut -d' ' -f1)"
-  actual_compatibility_id="$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s' \
+  actual_compatibility_id="$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
+    "$vendor_family" "$soc_family" "$actual_hal_transport" \
     "$manufacturer" "$actual_product" "$device" "$api" \
     "$actual_system_fingerprint" "$actual_vendor_fingerprint" \
-    "$actual_cameraserver" "$actual_provider" "$actual_graphics" | \
+    "$actual_cameraserver" "$actual_provider" "$actual_vendor_camera" \
+    "$actual_graphics" | \
     sha256sum | cut -d' ' -f1)"
 
+  [ "$soc_family" != "unknown" ] || abort "! 无法识别 SoC family，拒绝加载 replacement adapter"
+  [ "$actual_hal_transport" != "unknown" ] || abort "! 无法识别 Camera HIDL/AIDL transport"
+  [ "$(compat_value vendor_family)" = "$vendor_family" ] || abort "! 适配器厂商族不匹配"
+  [ "$(compat_value soc_family)" = "$soc_family" ] || abort "! 适配器 SoC family 不匹配"
+  [ "$(compat_value camera_hal_transport)" = "$actual_hal_transport" ] || \
+    abort "! 适配器 Camera HAL transport 不匹配"
   [ "$(compat_value manufacturer)" = "$manufacturer" ] || abort "! 适配器制造商不匹配"
   [ "$(compat_value product)" = "$actual_product" ] || abort "! 适配器 product 不匹配"
   [ "$(compat_value device)" = "$device" ] || abort "! 适配器设备不匹配"
@@ -86,13 +140,15 @@ if [ -f "$MODPATH/bin/vcames-camera-adapter" ]; then
     abort "! 适配器 cameraserver 不匹配"
   [ "$(compat_value camera_provider_sha256)" = "$actual_provider" ] || \
     abort "! 适配器 camera provider 集合不匹配"
+  [ "$(compat_value vendor_camera_libraries_sha256)" = "$actual_vendor_camera" ] || \
+    abort "! 适配器 vendor camera 库集合不匹配"
   [ "$(compat_value graphics_stack_sha256)" = "$actual_graphics" ] || \
     abort "! 适配器 mapper/allocator 集合不匹配"
   [ "$(compat_value adapter_sha256)" = "$actual_adapter" ] || \
     abort "! 适配器二进制自身哈希不匹配"
   [ "$(compat_value compatibility_id)" = "$actual_compatibility_id" ] || \
     abort "! compatibility_id 不匹配"
-  ui_print "- 前后摄像头替换适配器完整构建校验通过"
+  ui_print "- $vendor_family/$soc_family/$actual_hal_transport 前后摄适配器完整构建校验通过"
 fi
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644

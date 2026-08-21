@@ -8,5 +8,6 @@ The optional v4l2loopback git submodule is maintained by IOhannes m zmoelnig
 and contributors and is licensed separately under GPL-2.0-or-later. Its code
 is not relicensed by this project.
 
-Android and Pixel are trademarks of Google LLC. This project is not endorsed
-by or affiliated with Google.
+Android and Pixel are trademarks of Google LLC; Xiaomi, Redmi, POCO and
+Samsung marks belong to their respective owners. This project is not endorsed
+by or affiliated with those vendors.

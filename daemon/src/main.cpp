@@ -9,7 +9,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <grp.h>
 #include <sys/socket.h>
+#include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -39,6 +41,7 @@ std::atomic<bool> g_stop{false};
 std::atomic<int> g_control_listener{-1};
 std::atomic<int> g_frame_listener{-1};
 std::atomic<uid_t> g_extra_allowed_uid{static_cast<uid_t>(-1)};
+bool g_drop_to_system = false;
 
 void Log(const std::string& message) {
 #ifdef __ANDROID__
@@ -108,27 +111,58 @@ bool IsAllowedPeer(int fd) {
 }
 
 bool ParseArguments(int argc, char** argv, std::string* error) {
-    if (argc == 1) {
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument(argv[index]);
+        if (argument == "--drop-to-system") {
+            g_drop_to_system = true;
+            continue;
+        }
+        if (argument != "--allowed-uid" || index + 1 >= argc) {
+            if (error != nullptr) {
+                *error = "usage: vcamesd [--allowed-uid APP_UID] [--drop-to-system]";
+            }
+            return false;
+        }
+        const std::string_view text(argv[++index]);
+        unsigned long parsed = 0;
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+        if (text.empty() || result.ec != std::errc()
+                || result.ptr != text.data() + text.size()
+                || parsed < 10000 || parsed > 2'000'000) {
+            if (error != nullptr) {
+                *error = "allowed app UID must be an Android application UID";
+            }
+            return false;
+        }
+        g_extra_allowed_uid.store(static_cast<uid_t>(parsed), std::memory_order_relaxed);
+    }
+    return true;
+}
+
+bool DropRootPrivileges(std::string* error) {
+    if (!g_drop_to_system) {
         return true;
     }
-    if (argc != 3 || std::string_view(argv[1]) != "--allowed-uid") {
+    constexpr uid_t kSystemUid = 1000;
+    constexpr gid_t kSystemGid = 1000;
+    const gid_t groups[] = {1003, 3003};  // AID_CAMERA, AID_INET.
+    if (getuid() != 0) {
         if (error != nullptr) {
-            *error = "usage: vcamesd [--allowed-uid APP_UID]";
+            *error = "--drop-to-system requires vcamesd to start as uid 0";
         }
         return false;
     }
-    unsigned long parsed = 0;
-    const std::string_view text(argv[2]);
-    const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
-    if (text.empty() || result.ec != std::errc()
-            || result.ptr != text.data() + text.size()
-            || parsed < 10000 || parsed > 2'000'000) {
+    if (setgroups(sizeof(groups) / sizeof(groups[0]), groups) != 0
+            || setgid(kSystemGid) != 0
+            || setuid(kSystemUid) != 0
+            || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            || getuid() != kSystemUid || geteuid() != kSystemUid) {
         if (error != nullptr) {
-            *error = "allowed app UID must be an Android application UID";
+            *error = std::string("unable to drop daemon privileges: ")
+                    + std::strerror(errno);
         }
         return false;
     }
-    g_extra_allowed_uid.store(static_cast<uid_t>(parsed), std::memory_order_relaxed);
     return true;
 }
 
@@ -223,6 +257,7 @@ void HandleControlClient(int fd, vcames::Engine* engine) {
                     return;
                 }
                 close(frame_bus_fd);
+                engine->SetReplacementAttached(true);
             }
             WriteAll(fd, engine->StatusJson() + "\n");
             return;
@@ -264,10 +299,67 @@ void HandleFrameClient(int fd, vcames::Engine* engine) {
     timeval timeout{2, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     std::array<char, 4> magic{};
-    if (!ReadExact(fd, magic.data(), magic.size()) || magic != std::array<char, 4>{'V', 'C', 'F', '1'}) {
+    if (!ReadExact(fd, magic.data(), magic.size())) {
+        return;
+    }
+    const bool legacy_jpeg = magic == std::array<char, 4>{'V', 'C', 'F', '1'};
+    const bool typed_frames = magic == std::array<char, 4>{'V', 'C', 'F', '2'};
+    if (!legacy_jpeg && !typed_frames) {
         return;
     }
     while (!g_stop.load(std::memory_order_relaxed)) {
+        uint32_t format = 1;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t y_stride = 0;
+        uint32_t uv_stride = 0;
+        int64_t presentation_time_ns = 0;
+        if (typed_frames) {
+            std::array<uint32_t, 6> fields{};
+            if (!ReadExact(fd, fields.data(), sizeof(fields))) {
+                return;
+            }
+            format = ntohl(fields[0]);
+            width = ntohl(fields[1]);
+            height = ntohl(fields[2]);
+            y_stride = ntohl(fields[3]);
+            uv_stride = ntohl(fields[4]);
+            fields[5] = ntohl(fields[5]);
+            std::array<uint8_t, 8> timestamp{};
+            if (!ReadExact(fd, timestamp.data(), timestamp.size())) {
+                return;
+            }
+            uint64_t parsed_timestamp = 0;
+            for (uint8_t byte : timestamp) {
+                parsed_timestamp = (parsed_timestamp << 8) | byte;
+            }
+            presentation_time_ns = static_cast<int64_t>(parsed_timestamp);
+            if (format != 2 || width == 0 || height == 0
+                    || y_stride != width || uv_stride != width) {
+                Log("local producer sent unsupported typed frame metadata");
+                return;
+            }
+            const uint32_t frame_size = fields[5];
+            if (frame_size < 4 || frame_size > kMaxFrameBytes) {
+                Log("local producer sent an invalid NV21 frame size");
+                return;
+            }
+            std::vector<uint8_t> frame(frame_size);
+            if (!ReadExact(fd, frame.data(), frame.size())) {
+                return;
+            }
+            std::string error;
+            if (!engine->PushNv21Frame(
+                        std::move(frame),
+                        static_cast<int>(width),
+                        static_cast<int>(height),
+                        presentation_time_ns,
+                        &error)) {
+                Log("local NV21 frame rejected: " + error);
+                return;
+            }
+            continue;
+        }
         uint32_t network_size = 0;
         if (!ReadExact(fd, &network_size, sizeof(network_size))) {
             return;
@@ -331,6 +423,15 @@ int main(int argc, char** argv) {
     }
     g_control_listener.store(control_listener, std::memory_order_relaxed);
     g_frame_listener.store(frame_listener, std::memory_order_relaxed);
+    if (!DropRootPrivileges(&error)) {
+        Log(error);
+        close(frame_listener);
+        close(control_listener);
+        return 1;
+    }
+    if (g_drop_to_system) {
+        Log("dropped root privileges to Android system uid with camera/inet groups");
+    }
 
     vcames::Engine engine;
     // Configure the loopback device before the external Camera Provider scans

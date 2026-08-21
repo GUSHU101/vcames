@@ -21,16 +21,28 @@ final class FramePushClient implements Closeable {
                 SOCKET_NAME,
                 LocalSocketAddress.Namespace.ABSTRACT));
         output = new DataOutputStream(socket.getOutputStream());
-        output.write("VCF1".getBytes(StandardCharsets.US_ASCII));
+        output.write("VCF2".getBytes(StandardCharsets.US_ASCII));
         output.flush();
     }
 
-    void send(byte[] jpeg) throws IOException {
-        if (jpeg.length < 4 || jpeg.length > MAX_FRAME_BYTES) {
-            throw new IOException("JPEG frame is empty or too large");
+    void sendNv21(
+            byte[] nv21,
+            int width,
+            int height,
+            long presentationTimeNs) throws IOException {
+        long expected = (long) width * height * 3L / 2L;
+        if (width <= 0 || height <= 0 || (width & 1) != 0 || (height & 1) != 0
+                || nv21.length != expected || nv21.length > MAX_FRAME_BYTES) {
+            throw new IOException("NV21 frame metadata or payload is invalid");
         }
-        output.writeInt(jpeg.length);
-        output.write(jpeg);
+        output.writeInt(2); // SharedFrameBus::PixelFormat::kNv21
+        output.writeInt(width);
+        output.writeInt(height);
+        output.writeInt(width); // tightly packed Y stride
+        output.writeInt(width); // tightly packed interleaved VU stride
+        output.writeInt(nv21.length);
+        output.writeLong(presentationTimeNs);
+        output.write(nv21);
         output.flush();
     }
 

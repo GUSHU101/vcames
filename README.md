@@ -1,135 +1,108 @@
 # VCamES
 
-VCamES 是面向 Pixel 4–Pixel 6、Android 11–15 的系统级虚拟相机，支持定制 ROM
-原生集成，以及满足内核/Provider 前提的已 Root 原厂系统。
-它不使用 Xposed，也不向目标应用注入代码。通用模式由系统守护进程写入
-`/dev/video100`，再由 AOSP External Camera Provider 通过 Camera2/CameraX 暴露；前置、
-后置或双摄替换则要求与单一 Pixel OTA 指纹完全匹配的 Camera HAL 适配器。
+VCamES 2.1 是面向 Google、Xiaomi/Redmi/POCO、Samsung 的 Android 11–13
+（API 30–33）arm64 系统级虚拟相机工程。它支持定制 ROM 原生集成和已 Root 原厂系统，
+不使用 Xposed/Zygisk，也不把代码注入目标应用。
 
-> standalone Root APK 可以申请 KernelSU/Magisk 授权并安装内置 Bridge，但它不能凭空生成与当前
-> 内核/Camera HAL 匹配的二进制。构建 APK 时仍须提供目标原厂构建所需的 payload。
+项目把两类能力严格分开：
 
-[工程方案落实表](docs/ENGINEERING_PLAN_TRACEABILITY.md) 记录了本轮开发文档中每项要求的
-实现状态和仍需真机/厂商适配的边界。
+- `external`：`vcamesd → /dev/video100 → AOSP External Camera Provider`，增加外置相机 ID；
+- `front/back/both`：保留 OEM 原 camera ID、facing 和 metadata，仅由当前设备/OTA 专用的
+  HIDL/AIDL Camera adapter 替换非安全输出 buffer。
+
+普通 APK、ROOT 权限或 v4l2loopback 本身都不能把 external ID 变成原前后摄像头。
+仓库提供安全的数据平面、安装/哈希门禁和 adapter 协议，但不包含跨厂商通用的
+`cameraserver` 私有 ABI 注入器。没有精确 adapter 时，前后替换会失败关闭。
 
 ## 已实现
 
-- Android 11–15 控制应用：本地视频循环、HTTP MJPEG、分辨率、FPS、旋转、镜像、
-  中心裁切、断流保持、开机恢复和运行状态。
-- `vcamesd` 原生守护进程：低延迟 latest-frame 队列、丢弃积压帧、MJPEG 重连、
-  JPEG 安全限制、V4L2 输出和仅 UID 0/1000 可用的控制/推帧协议。
-- AOSP 产品包：平台签名 `system_ext` 应用、HIDL External Camera Provider、VINTF、
-  `external_camera_config.xml` 与 SELinux 策略。
-- Pixel 4/4a/5/5a（4.14/4.19）和 Pixel 6/6 Pro/6a（5.10 GKI）的内核接入说明。
-- Windows FFmpeg MJPEG 发送脚本、ADB 设备验收脚本、Gradle/CMake 测试和 CI。
-- Root Bridge：普通签名 APK、受 UID 限制的 Root 守护进程、KernelSU/Magisk 模块模板、
-  应用内 ROOT 授权/模块安装、standalone APK、v4l2loopback/Provider 可选 payload。
-- `external/front/back/both` 目标选择；前后替换使用三槽 memfd FrameBus，并在安装时校验
-  设备、API、system/vendor fingerprint、cameraserver、Provider、图形栈及 adapter 哈希。
-- APK 一键导出设备/Camera2/Root 能力画像；BootGuard 连续失败三次后禁用 replacement，
-  保留 external 链路和 last-known-good 记录。
+- 单 APK 请求 KernelSU/Magisk ROOT、部署 Bridge；daemon 建立系统端点后降权到
+  Android system UID，仅保留 camera/inet 补充组，再由普通应用 UID 控制；
+- 本地 MP4 使用 MediaCodec 解码为 YUV_420_888，再打包 NV21，通过 `VCF2` 本地协议推送；
+- HTTP MJPEG 具备有界解析、latest-frame、断线指数退避和超时保护；
+- FrameBus v2：4 槽 memfd、sequence lock、PTS/arrival、stride/format/rotation 元数据；
+- replacement 数据平面首选 NV21；只有 external/V4L2 路径需要 JPEG 编码；
+- `external/front/back/both`、旋转、镜像、中心裁切、FPS、hold/blank；
+- 设备画像：厂商、SoC、Camera HIDL/AIDL 实测、Camera2 ID/capability/尺寸/FPS；
+- 精确绑定 system/vendor fingerprint、cameraserver、Provider、vendor camera 库、
+  mapper/allocator 和 adapter SHA-256；OTA 后自动拒绝旧适配器；
+- BootGuard 连续失败三次禁用 replacement，并保留 external 救援链路；
+- API 30 与 API 33 arm64 ROOT 构建、system/root APK、Lint、原生测试和 CI。
 
 ## 数据路径
 
 ```text
-本地 MP4 / Windows OBS / HTTP MJPEG
-                 │
-          VCamES App / vcamesd
-                 │ JPEG
-        ┌────────┴────────┐
- /dev/video100 (V4L2)    memfd-ring-v1 FrameBus
-        │                 │
- AOSP External Provider  精确构建 Camera HAL adapter
-        │ external ID     │ 原 front/back ID/metadata
-        └────────┬────────┘
-        CameraService → Camera2/CameraX 应用
+本地 MP4 ──MediaCodec/YUV──┐
+                           ├─ vcamesd latest-frame ─┬─ JPEG → V4L2 → external ID
+HTTP MJPEG ──有界解码──────┘                       └─ NV21 FrameBus v2
+                                                         │
+                                    精确 OTA Camera adapter（可选）
+                                                         │
+                                       原 front/back ID + OEM metadata
 ```
 
 ## 快速构建
-
-普通 Gradle 构建会生成 system/root 两个控制端，但 APK 自身不会创造内核相机设备：
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Android\openjdk\jdk-21.0.8'
 $env:ANDROID_HOME = 'C:\Program Files (x86)\Android\android-sdk'
 .\gradlew.bat :app:assembleSystemDebug :app:assembleRootDebug `
   :app:lintSystemDebug :app:lintRootDebug
+
+.\tools\root\build-root-module.ps1 -Api 33 `
+  -NdkPath C:\Android\Sdk\ndk\27.2.12479018
 ```
 
-AOSP 集成的入口如下：
+不传 payload 会生成可安装的一体化 Root APK 和 Bridge ZIP，但只具备 daemon/控制层；
+external 仍要求匹配内核的 v4l2loopback 与可注册的 Provider，前后替换仍要求精确 adapter。
+
+## 已 Root 原厂系统工作流
+
+1. 运行 `.\tools\adb\check-root-stock.ps1`，确认厂商、API、ROOT、SELinux 和现有相机链路。
+2. external 模式准备与当前 `uname -r`/KMI/签名完全匹配的 `.ko` 和相应 Provider。
+3. front/back/both 模式先针对目标 system/vendor 构建 adapter，再运行：
+
+```powershell
+.\tools\adb\capture-camera-compatibility.ps1 `
+  -AdapterPath C:\device-build\vcames-camera-adapter
+
+.\tools\root\build-root-module.ps1 -Api 33 `
+  -ReplacementAdapter C:\device-build\vcames-camera-adapter `
+  -CompatibilityManifest .\out\camera-compatibility.properties
+```
+
+4. 安装 `out/root/VCamES-Root-standalone.apk`，点击“授权 ROOT 并部署”，重启。
+5. 通过 Camera2 内容测试与压力测试后，才能把单一组合标记为 `VERIFIED`。
+
+详见 [厂商/SoC 支持策略](docs/VENDOR_SUPPORT.md)、[原厂 Root 部署](docs/ROOT_STOCK.md)、
+[前后摄像头替换](docs/FRONT_BACK_REPLACEMENT.md)、[设备画像](docs/DEVICE_PROFILING.md) 和
+[真机验收门槛](docs/VALIDATION_PLAN.md)。
+
+## AOSP/定制 ROM
 
 ```make
-# device/<vendor>/<device>/device.mk
 $(call inherit-product, vendor/gushu101/vcames/aosp/product/vcames.mk)
-
-# device/<vendor>/<device>/BoardConfig.mk
 VCAMES_PATH := vendor/gushu101/vcames
 include $(VCAMES_PATH)/aosp/BoardConfigVcames.mk
 ```
 
-然后完成匹配设备的内核模块接入并构建系统：
+产品树必须按 Android 11/12/12L/13 分支和目标厂商实际 Camera transport 选择 HIDL/AIDL
+Provider，并在同一内核构建中接入 v4l2loopback。详见 [AOSP 集成](docs/AOSP_INTEGRATION.md)。
 
-```bash
-source build/envsetup.sh
-lunch <your_pixel_product>-userdebug
-m VCamES vcamesd android.hardware.camera.provider@2.4-external-service
-```
+## 视频源与边界
 
-详细步骤见 [AOSP 集成](docs/AOSP_INTEGRATION.md) 和
-[Pixel 支持矩阵](docs/PIXEL_SUPPORT.md)。
+- 手机本地视频：SAF 选择后循环播放；不会上传媒体。
+- Windows/OBS：使用 [start-mjpeg.ps1](tools/windows/start-mjpeg.ps1)，或 VCamLab-2.0
+  输出的 MJPEG URL；当前不解码 HLS。
+- HTTP MJPEG 是明文，仅用于可信局域网。
+- secure/protected、RAW、depth 输出必须由 adapter 拒绝并回退 OEM 相机。
+- 不提供身份验证绕过、活体检测规避、反检测或静默录制功能。
 
-## 已 Root 原厂系统
+## 参考与许可
 
-先运行只读兼容性检查：
+架构和 Windows MJPEG 兼容性参考
+[VCamLab-2.0](https://github.com/GUSHU101/VCamLab-2.0)。用户提供 APK 仅做离线静态分析，
+没有执行、上传、复制其私有二进制或 hook 实现，见 [参考 APK 分析](docs/REFERENCE_APK.md)。
+新增 PDF 的工程建议落实/延期边界见 [PDF 参考审阅](docs/REFERENCE_PDF_REVIEW.md)。
 
-```powershell
-.\tools\adb\check-root-stock.ps1
-```
-
-external 模式要求 `/dev/video100` 和 `camera.provider ... external/0`；replacement-only
-模式不再要求 V4L2，但必须提供精确 OTA 适配器。KernelSU v3 的 system/vendor overlay
-还需设备已配置 metamodule。打包入口：
-
-```powershell
-.\tools\root\build-root-module.ps1 -Api 35 `
-  -KernelModule C:\pixel-kernel\v4l2loopback.ko `
-  -ProviderBinary C:\aosp-out\android.hardware.camera.provider@2.4-external-service
-```
-
-构建器同时生成 `VCamES-Root-standalone.apk`。安装后点击“授权 ROOT 并部署”，应用会把内置
-Bridge 交给 KernelSU/Magisk，完成后重启。前后摄像头模式还需传入 `-ReplacementAdapter`
-和 `-CompatibilityManifest`，详见 [前后摄像头替换](docs/FRONT_BACK_REPLACEMENT.md)、
-[设备画像](docs/DEVICE_PROFILING.md) 与 [真机验收门槛](docs/VALIDATION_PLAN.md)。
-
-Root 方案保持 SELinux enforcing，不使用 Zygisk/Xposed。详细前提和失败状态见
-[原厂 Root 部署](docs/ROOT_STOCK.md)。
-
-## 视频源
-
-- 手机本地视频：应用内选择文件后启动；使用 MediaCodec 解码并通过受限本地 socket 推帧。
-- 局域网 MJPEG：填写 `http://电脑IP:8888/live.mjpg`。
-- Windows/OBS：使用 [start-mjpeg.ps1](tools/windows/start-mjpeg.ps1)，或继续使用
-  VCamLab-2.0 已有的 Windows 控制中心所输出的同一 MJPEG 地址。
-
-本项目当前不解码 HLS。使用 VCamLab Windows 控制中心时请选择 MJPEG 模式。
-
-## 重要边界
-
-- 通用模式会把它作为一枚 **external camera** 暴露。遵循 Android API 的应用通常可见；
-  主动拒绝外置相机、只接受固定前/后物理 ID，或带企业安全策略的应用可能不会使用它。
-- UI 和 daemon 已支持前置/后置/双摄目标，但仓库不包含跨构建通用注入器。只有在打包了
-  对当前 Pixel OTA 精确编译并签名验证的适配器时，这些模式才会启动。
-- 不包含身份验证绕过、活体检测规避、反检测或静默录制功能。请只在获得授权的测试、
-  演示、直播和隐私保护场景使用，并让参与者知晓视频源。
-- 解锁 bootloader、刷写系统/内核会清除数据且存在无法启动风险。保留原厂 boot 镜像和
-  可用的 fastboot 恢复路径。
-
-## 来源与许可
-
-架构和 Windows MJPEG 兼容性参考了同作者的
-[VCamLab-2.0](https://github.com/GUSHU101/VCamLab-2.0)。参考 APK 仅做静态互操作分析；
-没有复制其私有二进制、资源或注入实现，详见 [参考 APK 深度分析](docs/REFERENCE_APK.md)
-和 [`项目分析.txt` 复核](docs/PROJECT_ANALYSIS_REVIEW.md)。
-
-VCamES 自有代码采用 Apache-2.0。`stb` 和可选 `v4l2loopback` 子模块按各自许可证发布，
-详见 [NOTICE](NOTICE)。
+自有代码采用 Apache-2.0；第三方依赖按各自许可证发布，见 [NOTICE](NOTICE)。

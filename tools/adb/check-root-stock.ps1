@@ -24,39 +24,48 @@ if ($rootUid -ne '0') {
 }
 
 $model = Invoke-Shell 'getprop ro.product.model'
+$manufacturer = Invoke-Shell 'getprop ro.product.manufacturer'
+$brand = Invoke-Shell 'getprop ro.product.brand'
 $device = Invoke-Shell 'getprop ro.product.device'
 $apiText = Invoke-Shell 'getprop ro.build.version.sdk'
 $release = Invoke-Shell 'getprop ro.build.version.release'
 $kernel = Invoke-RootShell 'uname -r'
+$socManufacturer = Invoke-Shell 'getprop ro.soc.manufacturer'
+$socModel = Invoke-Shell 'getprop ro.soc.model'
+$boardPlatform = Invoke-Shell 'getprop ro.board.platform'
 $selinux = Invoke-RootShell 'getenforce'
 $videoNode = Invoke-RootShell 'ls -lZ /dev/video100 2>/dev/null || true'
 $card = Invoke-RootShell 'cat /sys/class/video4linux/video100/name 2>/dev/null || true'
 $module = Invoke-RootShell 'cat /sys/module/v4l2loopback/version 2>/dev/null || grep v4l2loopback /proc/modules || true'
 $provider = Invoke-RootShell '(lshal 2>/dev/null; service list 2>/dev/null) | grep "camera.provider.*external/0" || true'
+$cameraProviders = Invoke-RootShell '(lshal 2>/dev/null; service list 2>/dev/null) | grep -i "camera.provider" | head -n 20 || true'
 $providerBinary = Invoke-RootShell 'ls /vendor/bin/hw/android.hardware.camera.provider@2.4-external-service 2>/dev/null || true'
 $manifest = Invoke-RootShell 'grep -R "external/0" /vendor/etc/vintf/manifest* 2>/dev/null | head -n 3 || true'
 $kernelConfig = Invoke-RootShell 'if [ -r /proc/config.gz ]; then zcat /proc/config.gz | grep -E "CONFIG_MODULES=|CONFIG_MODULE_SIG_FORCE=|CONFIG_MODVERSIONS="; fi'
 
 $api = 0
 [void][int]::TryParse($apiText, [ref]$api)
-$supportedDevice = $device -in @('flame','coral','sunfish','bramble','redfin','barbet','oriole','raven','bluejay')
+$vendorIdentity = "$manufacturer|$brand".ToLowerInvariant()
+$supportedVendor = $vendorIdentity -match 'google|xiaomi|redmi|poco|samsung'
 $hasVideo = -not [string]::IsNullOrWhiteSpace($videoNode)
 $hasProvider = $provider -match 'external/0'
 
-Write-Host "设备：$model ($device) · Android $release / API $api · kernel $kernel"
+Write-Host "设备：$manufacturer / $brand · $model ($device) · Android $release / API $api"
+Write-Host "SoC：$socManufacturer $socModel / $boardPlatform · kernel $kernel"
 Write-Host "Root：UID $rootUid · SELinux：$selinux"
 Write-Host "内核配置：$kernelConfig"
 Write-Host
-Write-Host ($(if ($supportedDevice) {'[PASS]'} else {'[FAIL]'}) + ' Pixel 4-6 设备代号')
-Write-Host ($(if ($api -ge 30 -and $api -le 35) {'[PASS]'} else {'[FAIL]'}) + ' API 30-35')
+Write-Host ($(if ($supportedVendor) {'[PASS]'} else {'[FAIL]'}) + ' Google / 小米 / 三星厂商范围')
+Write-Host ($(if ($api -ge 30 -and $api -le 33) {'[PASS]'} else {'[FAIL]'}) + ' API 30-33')
 Write-Host ($(if ($selinux -eq 'Enforcing') {'[PASS]'} else {'[FAIL]'}) + ' SELinux enforcing')
 Write-Host ($(if ($hasVideo) {'[PASS]'} else {'[NEED]'}) + ' /dev/video100')
 Write-Host ($(if ($card -match 'VCamES') {'[PASS]'} else {'[INFO]'}) + " card=$card module=$module")
 Write-Host ($(if ($hasProvider) {'[PASS]'} else {'[NEED]'}) + ' camera provider external/0')
 Write-Host "Stock Provider binary：$providerBinary"
 Write-Host "Stock VINTF：$manifest"
+Write-Host "Camera Provider 服务：$cameraProviders"
 
-if ($supportedDevice -and $api -ge 30 -and $api -le 35 -and
+if ($supportedVendor -and $api -ge 30 -and $api -le 33 -and
         $selinux -eq 'Enforcing' -and $hasVideo -and $hasProvider) {
     Write-Host "`nREADY：可安装不含内核/Provider payload 的 Root Bridge。"
     exit 0

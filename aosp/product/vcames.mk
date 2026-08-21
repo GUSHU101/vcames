@@ -1,4 +1,4 @@
-# VCamES system image product fragment for Android 11-15.
+# VCamES system image product fragment for Android 11-13 (API 30-33).
 VCAMES_PATH := $(call my-dir)/../..
 
 PRODUCT_PACKAGES += \

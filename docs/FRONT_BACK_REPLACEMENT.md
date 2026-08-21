@@ -1,119 +1,84 @@
 # 前置/后置摄像头替换适配器
 
-## 两条相机路径
+## 必要边界
 
-`external` 是跨构建的通用路径：VCamES 把 MJPEG 写到 V4L2 loopback，AOSP External Camera
-Provider 注册一个新外置 camera ID。AOSP 文档也明确说明 external USB camera 并不替代
-手机内置 HAL。
+前后替换不是 external camera。adapter 必须在 OEM Camera HAL/provider 可维护边界中保留
+原 camera ID 与 metadata，并只替换允许的输出 buffer。定制 ROM 优先实现 HIDL/AIDL
+Provider proxy；Root 原厂系统只能维护与完整 OTA 绑定的 adapter。
 
-`front`、`back` 和 `both` 必须保留 Pixel 原有 camera ID、facing、静态 metadata 和 capture
-request/result 语义，只替换输出 buffer。这属于 Camera HAL/provider proxy 工作，不能由普通
-APK 或通用 v4l2loopback 节点完成。
+本项目不提供 ptrace/ShadowHook 通用注入器，不关闭 SELinux，也不会在 ABI/hash 不匹配时
+尝试启动。Google、Xiaomi、Samsung 分别还要按 Qualcomm/Tensor/MediaTek/Exynos 与实际
+HIDL/AIDL transport 分支实现。
 
-Android 13 起 Camera HAL 新开发使用稳定 AIDL，同时框架仍兼容既有 HIDL HAL。具体 Pixel
-原厂构建使用哪套 provider/vendor 组件，必须从目标系统 VINTF、服务注册与 ELF 依赖实测，
-不能只按 Android 大版本猜测。
+## adapter 服务协议 v2
 
-参考：
-[AOSP Camera HAL](https://source.android.com/docs/core/camera/camera3)、
-[External USB cameras](https://source.android.com/docs/core/camera/external-usb-cameras)、
-[VINTF manifests](https://source.android.com/docs/core/architecture/vintf/objects)。
-
-## daemon 激活协议
-
-设备专用二进制安装为 `bin/vcames-camera-adapter`，由 Root Bridge 以以下参数启动：
+Root Bridge 启动：
 
 ```text
-vcames-camera-adapter --serve --socket vcames-camera-adapter
+vcames-camera-adapter --serve --socket vcames-camera-adapter \
+  --manifest /data/adb/modules/vcames/compatibility.properties
 ```
 
-它必须监听名为 `vcames-camera-adapter` 的 Linux abstract `AF_UNIX` socket，只允许 Root 模式
-UID 0 或 ROM 模式 UID 1000 的 daemon peer；daemon 也只信任 UID 0、1000 或 cameraserver
-UID 1047 的适配器。协议为 UTF-8 行文本，以单独一行 `.` 结束：
+daemon 通过 Linux abstract socket 依次执行：
 
 ```text
-ACTIVATE
-target=both
-device=/dev/video100
-width=1280
-height=720
-fps=30
-transport=memfd-ring-v1
-bus_version=1
+GET_INFO → PROBE → ATTACH_BUS → ACTIVATE → HEALTH
+```
+
+`GET_INFO` 必须声明 protocol v2、API 30–33 与 OEM metadata policy；`PROBE` 必须确认当前
+完整构建兼容并拒绝 secure stream。`ATTACH_BUS` 在首次 `sendmsg` 附带 FrameBus memfd：
+
+```text
+ATTACH_BUS
+adapter_protocol=2
+transport=memfd-ring-v2
+bus_version=2
 header_size=4096
-slot_count=3
+slot_count=4
 slot_capacity=16777216
-format=jpeg
+formats=jpeg,nv21,nv12,i420,rgba8888
+preferred_format=nv21
 .
 ```
 
-`ACTIVATE` 的首次 `recvmsg` 同时携带一个 `SCM_RIGHTS` fd。adapter 必须验证 header magic
-`VCFBUS1\0`、版本、尺寸和槽边界，使用 `published_sequence` 找最新槽，并以
-`write_epoch` 前后相同且为偶数作为完整帧判据。fd 缺失、格式未知或尺寸越界必须拒绝。
-`published_sequence=0` 表示当前没有有效帧（例如 `hold_last=false` 且来源超时），adapter
-应按其显式策略输出黑帧或停止当前 request，不能继续重放旧槽。
+附着成功必须回复：
 
-只有适配器已经把目标 camera pipeline 安全切换到虚拟帧时，才能返回 `OK\n`。错误应返回
-稳定、可读的单行原因。停止/切回 external 时 daemon 发送：
+```text
+OK
+adapter_protocol=2
+frame_transport=attached
+bus_version=2
+.
+```
+
+然后 `ACTIVATE` 提交 target/width/height/fps 与 metadata/secure/failure policy，adapter 必须
+回复 `pipeline=active`、`metadata=preserved`。最后 `HEALTH` 必须同时确认
+`health=ready`、`frame_transport=attached`、`pipeline=active`；任何阶段失败都会发送
+`DEACTIVATE` 并停止 replacement。
+
+它必须验证 `VCFBUS2\0`、版本、映射长度、所有槽边界、format/stride/尺寸和偶数稳定
+`write_epoch`，按 `published_sequence` 只取最新帧。`published_sequence=0`、adapter 错误或
+daemon 死亡时按 `failure_policy` 回退 OEM 原相机。secure/protected、RAW、depth 和未知 stream
+不得写入虚拟内容。只返回 `OK` 而未确认协议/FD 的旧 adapter 会被拒绝。
+
+停止请求为：
 
 ```text
 DEACTIVATE
 .
 ```
 
-适配器退出、拒绝或 2 秒内不应答时，`vcamesd` 拒绝启动 front/back/both 模式。
+## 精确构建与打包
 
-## 精确构建绑定
-
-先生成目标构建的 adapter，再在目标手机连接 ADB，并允许 shell 的 KernelSU/Magisk ROOT：
+先连接目标手机、允许 ADB shell ROOT，生成清单，再同时传入 adapter：
 
 ```powershell
 .\tools\adb\capture-camera-compatibility.ps1 `
-  -AdapterPath C:\pixel-build\vcames-camera-adapter
+  -AdapterPath C:\device-build\vcames-camera-adapter
+
+.\tools\root\build-root-module.ps1 -Api 33 `
+  -ReplacementAdapter C:\device-build\vcames-camera-adapter `
+  -CompatibilityManifest .\out\camera-compatibility.properties
 ```
 
-生成文件包含：
-
-```properties
-manufacturer=Google
-product=redfin
-device=redfin
-api=34
-system_fingerprint_sha256=<ro.build.fingerprint 的无换行 SHA-256>
-vendor_fingerprint_sha256=<ro.vendor.build.fingerprint 的无换行 SHA-256>
-cameraserver_sha256=</system/bin/cameraserver 的 SHA-256>
-camera_provider_sha256=<Camera Provider 文件集合聚合 SHA-256>
-graphics_stack_sha256=<mapper/allocator 文件集合聚合 SHA-256>
-adapter_sha256=<adapter SHA-256>
-compatibility_id=<规范字段 SHA-256>
-```
-
-打包时同时传入适配器和清单：
-
-```powershell
-.\tools\root\build-root-module.ps1 -Api 34 `
-  -ReplacementAdapter C:\pixel-build\vcames-camera-adapter `
-  -CompatibilityManifest .\out\camera-compatibility.properties `
-  -KernelModule C:\pixel-build\v4l2loopback.ko
-```
-
-模块安装器会在启用 payload 前比较全部字段。OTA、设备、Provider 或图形栈任一变化
-都会中止安装。清单不是“兼容声明”的替代品：适配器本身仍需对该构建做 Camera CTS/VTS、
-前后切换、预览/录像/拍照、并发 camera、旋转和长时间稳定性测试。
-
-## 推荐实现方式
-
-定制 ROM 应在目标 Android 分支实现 AIDL/HIDL Camera Provider proxy，并在构建期加入 VINTF、
-init 与 SELinux；这是最可维护的前后替换方案。Root 原厂兼容层只能是按完整 OTA 构建维护的
-适配器，并且保持 SELinux Enforcing。VCamES 不提供通用 ptrace/ShadowHook 注入器，也不会
-在 ABI 不匹配时尝试启动。
-
-状态含义：
-
-| 状态 | 能力 |
-|---|---|
-| `READY_EXTERNAL` | external 基础链路已就绪 |
-| `READY_REPLACEMENT_UNVERIFIED` | replacement 数据通道已启动，尚未通过真机内容自检 |
-| `READY_EXTERNAL_AND_REPLACEMENT_UNVERIFIED` | 两条基础链路都已启动，replacement 尚未验证 |
-| `REPLACEMENT_ADAPTER_START_FAILED` | 已打包适配器但启动失败 |
-| `SAFE_MODE_REPLACEMENT_DISABLED` | 连续失败触发 BootGuard，external 可继续救援 |
+没有这两个文件时构建仍可用于 external/控制层，但 front/back/both 必须明确失败。

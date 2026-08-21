@@ -9,7 +9,7 @@ import java.io.InputStream;
 
 final class VariantDeploymentBridge implements DeploymentBridge {
     private static final String MODULE_ASSET = "vcames-root-bridge.zip";
-    private static final int BRIDGE_VERSION_CODE = 20000;
+    private static final int BRIDGE_VERSION_CODE = 20100;
 
     @Override
     public String actionLabel() {
@@ -74,9 +74,12 @@ final class VariantDeploymentBridge implements DeploymentBridge {
 
     private static String diagnosticCommand() {
         return "printf 'device='; getprop ro.product.device; "
+                + "printf ' brand='; getprop ro.product.brand; "
                 + "printf ' product='; getprop ro.product.name; "
                 + "printf ' manufacturer='; getprop ro.product.manufacturer; "
+                + "printf ' soc_manufacturer='; getprop ro.soc.manufacturer; "
                 + "printf ' soc='; getprop ro.soc.model; "
+                + "printf ' board_platform='; getprop ro.board.platform; "
                 + "printf ' api='; getprop ro.build.version.sdk; "
                 + "printf ' kernel='; uname -r; "
                 + "printf ' selinux='; getenforce; "
@@ -86,7 +89,10 @@ final class VariantDeploymentBridge implements DeploymentBridge {
                 + "printf '%s' \"$(getprop ro.vendor.build.fingerprint)\" | sha256sum | cut -d' ' -f1; "
                 + "printf '\\ncameraserver_sha256='; "
                 + "sha256sum /system/bin/cameraserver 2>/dev/null | cut -d' ' -f1; "
-                + "printf ' status='; cat /data/adb/vcames/status.txt 2>/dev/null || printf UNKNOWN; "
+                + "printf '\\ncamera_hal_services='; "
+                + "(lshal 2>/dev/null; service list 2>/dev/null) | "
+                + "grep -i 'camera.provider' | head -n 12 | tr '\\n' ';'; "
+                + "printf '\\nstatus='; cat /data/adb/vcames/status.txt 2>/dev/null || printf UNKNOWN; "
                 + "if [ -d /data/adb/modules/vcames_root_bridge ]; then "
                 + "printf '\\nmodule=installed module_version='; "
                 + "sed -n 's/^versionCode=//p' "

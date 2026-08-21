@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.gushu101.vcames"
         minSdk = 30
         targetSdk = 35
-        versionCode = 20000
-        versionName = "2.0.0"
+        versionCode = 20100
+        versionName = "2.1.0"
     }
 
     flavorDimensions += "deployment"
@@ -48,8 +48,8 @@ android {
     lint {
         abortOnError = true
         warningsAsErrors = true
-        // API 35 is intentional: VCamES targets Android 11-15, even when a
-        // newer SDK happens to be installed on the build host.
+        // Compile/target SDK can be newer than the deliberately narrow
+        // runtime support matrix (Android 11-13 / API 30-33).
         disable += setOf("ExpiredTargetSdkVersion", "OldTargetApi")
     }
 }

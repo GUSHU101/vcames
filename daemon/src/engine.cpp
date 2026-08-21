@@ -13,7 +13,12 @@
 namespace vcames {
 namespace {
 
-constexpr size_t kMaxJpegBytes = 16 * 1024 * 1024;
+constexpr size_t kMaxFrameBytes = 16 * 1024 * 1024;
+
+int64_t SteadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 }  // namespace
 
@@ -69,6 +74,7 @@ void Engine::Stop() {
     status_.source_connected = false;
     status_.sink_open = false;
     status_.frame_bus_ready = false;
+    status_.replacement_attached = false;
     latest_frame_.reset();
     frame_bus_.Close();
 }
@@ -83,14 +89,61 @@ bool Engine::PushFrame(std::vector<uint8_t>&& jpeg, std::string* error) {
             return false;
         }
     }
-    if (jpeg.size() < 4 || jpeg.size() > kMaxJpegBytes) {
+    if (jpeg.size() < 4 || jpeg.size() > kMaxFrameBytes) {
         if (error != nullptr) {
             *error = "local JPEG frame is empty or too large";
         }
         return false;
     }
-    PublishFrame(std::move(jpeg));
+    SourceFrame frame;
+    frame.payload = std::move(jpeg);
+    frame.format = SharedFrameBus::PixelFormat::kJpeg;
+    frame.presentation_time_ns = SteadyNowNs();
+    frame.arrival_time_ns = frame.presentation_time_ns;
+    PublishFrame(std::move(frame));
     return true;
+}
+
+bool Engine::PushNv21Frame(
+        std::vector<uint8_t>&& nv21,
+        int width,
+        int height,
+        int64_t presentation_time_ns,
+        std::string* error) {
+    {
+        std::lock_guard lock(mutex_);
+        if (!status_.running || config_.url != "push://local") {
+            if (error != nullptr) {
+                *error = "local frame producer is not active";
+            }
+            return false;
+        }
+    }
+    const size_t pixels = width > 0 && height > 0
+            ? static_cast<size_t>(width) * static_cast<size_t>(height)
+            : 0;
+    if (width <= 0 || height <= 0 || (width & 1) != 0 || (height & 1) != 0
+            || pixels > 3840u * 2160u || nv21.size() != pixels * 3 / 2
+            || nv21.size() > kMaxFrameBytes) {
+        if (error != nullptr) {
+            *error = "local NV21 frame metadata or payload is invalid";
+        }
+        return false;
+    }
+    SourceFrame frame;
+    frame.payload = std::move(nv21);
+    frame.format = SharedFrameBus::PixelFormat::kNv21;
+    frame.width = width;
+    frame.height = height;
+    frame.presentation_time_ns = presentation_time_ns;
+    frame.arrival_time_ns = SteadyNowNs();
+    PublishFrame(std::move(frame));
+    return true;
+}
+
+void Engine::SetReplacementAttached(bool attached) {
+    std::lock_guard lock(mutex_);
+    status_.replacement_attached = attached;
 }
 
 std::string Engine::StatusJson() const {
@@ -106,7 +159,10 @@ std::string Engine::StatusJson() const {
          << ",\"connected\":" << (status_.source_connected ? "true" : "false")
          << ",\"camera_ready\":" << (status_.sink_open ? "true" : "false")
          << ",\"frame_bus_ready\":" << (status_.frame_bus_ready ? "true" : "false")
-         << ",\"transport\":\"memfd-ring-v1\""
+         << ",\"replacement_attached\":"
+         << (status_.replacement_attached ? "true" : "false")
+         << ",\"transport\":\"memfd-ring-v2\""
+         << ",\"frame_format\":\"" << JsonEscape(status_.frame_format) << "\""
          << ",\"target\":\"" << JsonEscape(config_.target) << "\""
          << ",\"received\":" << status_.frames_received
          << ",\"written\":" << status_.frames_written
@@ -134,7 +190,14 @@ void Engine::SourceLoop() {
         source.Stream(
                 config_.url,
                 stop_requested_,
-                [this](std::vector<uint8_t>&& jpeg) { PublishFrame(std::move(jpeg)); },
+                [this](std::vector<uint8_t>&& jpeg) {
+                    SourceFrame frame;
+                    frame.payload = std::move(jpeg);
+                    frame.format = SharedFrameBus::PixelFormat::kJpeg;
+                    frame.presentation_time_ns = SteadyNowNs();
+                    frame.arrival_time_ns = frame.presentation_time_ns;
+                    PublishFrame(std::move(frame));
+                },
                 [this, &connected_once]() {
                     connected_once = true;
                     std::lock_guard lock(mutex_);
@@ -145,8 +208,6 @@ void Engine::SourceLoop() {
         if (stop_requested_.load(std::memory_order_relaxed)) {
             break;
         }
-        // A source that was healthy should get a fast first reconnect. Without
-        // this reset, an old outage leaves later reconnects at the 30 s ceiling.
         if (connected_once) {
             backoff_seconds = 1;
         }
@@ -164,30 +225,27 @@ void Engine::SourceLoop() {
 
 void Engine::WriterLoop() {
     V4l2Sink sink;
-    std::vector<uint8_t> processed_frame;
+    SharedFrameBus::Frame bus_frame;
+    std::vector<uint8_t> external_frame;
     uint64_t consumed_generation = 0;
     const auto frame_interval = std::chrono::nanoseconds(1'000'000'000LL / config_.fps);
     auto next_write = std::chrono::steady_clock::now();
 
     while (!stop_requested_.load(std::memory_order_relaxed)) {
-        std::shared_ptr<const std::vector<uint8_t>> source_frame;
+        std::shared_ptr<const SourceFrame> source_frame;
         uint64_t generation = consumed_generation;
         std::chrono::steady_clock::time_point last_frame_time;
         {
             std::unique_lock lock(mutex_);
             condition_.wait_until(lock, next_write,
-                                  [this, consumed_generation, &processed_frame] {
+                                  [this, consumed_generation, &bus_frame] {
                 return stop_requested_.load(std::memory_order_relaxed)
-                        || (processed_frame.empty()
+                        || (bus_frame.payload.empty()
                             && latest_generation_ != consumed_generation);
             });
             if (stop_requested_.load(std::memory_order_relaxed)) {
                 break;
             }
-
-            // A newly published frame can wake an idle writer before its next
-            // scheduled tick. Keep the configured FPS authoritative and take
-            // the newest snapshot only when that tick is actually due.
             const auto before_tick = std::chrono::steady_clock::now();
             if (before_tick < next_write) {
                 condition_.wait_until(lock, next_write, [this] {
@@ -214,24 +272,73 @@ void Engine::WriterLoop() {
                 .jpeg_quality = config_.jpeg_quality,
             };
             std::string transform_error;
-            int source_width = 0;
-            int source_height = 0;
-            if (TransformJpeg(
-                        *source_frame,
+            bool transformed = false;
+            int source_width = source_frame->width;
+            int source_height = source_frame->height;
+            bus_frame = SharedFrameBus::Frame{};
+            external_frame.clear();
+            if (source_frame->format == SharedFrameBus::PixelFormat::kJpeg) {
+                if (config_.target == "external") {
+                    transformed = TransformJpeg(
+                            source_frame->payload,
+                            options,
+                            &bus_frame.payload,
+                            &source_width,
+                            &source_height,
+                            &transform_error);
+                    bus_frame.format = SharedFrameBus::PixelFormat::kJpeg;
+                    external_frame = bus_frame.payload;
+                } else {
+                    transformed = TransformJpegToNv21(
+                            source_frame->payload,
+                            options,
+                            &bus_frame.payload,
+                            &source_width,
+                            &source_height,
+                            &transform_error);
+                    bus_frame.format = SharedFrameBus::PixelFormat::kNv21;
+                    bus_frame.y_stride = static_cast<uint32_t>(config_.width);
+                    bus_frame.uv_stride = static_cast<uint32_t>(config_.width);
+                }
+            } else if (source_frame->format == SharedFrameBus::PixelFormat::kNv21) {
+                transformed = TransformNv21(
+                        source_frame->payload,
+                        source_frame->width,
+                        source_frame->height,
                         options,
-                        &processed_frame,
-                        &source_width,
-                        &source_height,
-                        &transform_error)) {
+                        &bus_frame.payload,
+                        &transform_error);
+                bus_frame.format = SharedFrameBus::PixelFormat::kNv21;
+                bus_frame.y_stride = static_cast<uint32_t>(config_.width);
+                bus_frame.uv_stride = static_cast<uint32_t>(config_.width);
+                if (transformed && config_.target == "external") {
+                    transformed = Nv21ToJpeg(
+                            bus_frame.payload,
+                            config_.width,
+                            config_.height,
+                            config_.jpeg_quality,
+                            &external_frame,
+                            &transform_error);
+                }
+            }
+            if (transformed) {
+                bus_frame.width = static_cast<uint32_t>(config_.width);
+                bus_frame.height = static_cast<uint32_t>(config_.height);
+                bus_frame.presentation_time_ns = source_frame->presentation_time_ns;
+                bus_frame.arrival_time_ns = source_frame->arrival_time_ns;
                 std::lock_guard lock(mutex_);
                 status_.source_width = source_width;
                 status_.source_height = source_height;
+                status_.frame_format = bus_frame.format == SharedFrameBus::PixelFormat::kNv21
+                        ? "nv21"
+                        : "jpeg";
                 status_.error.clear();
             } else {
                 std::lock_guard lock(mutex_);
                 status_.error = std::move(transform_error);
                 ++status_.frames_dropped;
-                processed_frame.clear();
+                bus_frame.payload.clear();
+                external_frame.clear();
             }
             consumed_generation = generation;
         }
@@ -247,21 +354,13 @@ void Engine::WriterLoop() {
             next_write = now + frame_interval;
             continue;
         }
-        if (processed_frame.empty()) {
+        if (bus_frame.payload.empty()) {
             next_write = now + frame_interval;
             continue;
         }
 
         std::string sink_error;
-        const int64_t timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                now.time_since_epoch()).count();
-        if (!frame_bus_.PublishJpeg(
-                    processed_frame,
-                    config_.width,
-                    config_.height,
-                    timestamp_ns,
-                    timestamp_ns,
-                    &sink_error)) {
+        if (!frame_bus_.Publish(bus_frame, &sink_error)) {
             std::lock_guard lock(mutex_);
             status_.frame_bus_ready = false;
             status_.sink_open = false;
@@ -280,13 +379,20 @@ void Engine::WriterLoop() {
             }
             continue;
         }
+        if (external_frame.empty()) {
+            std::lock_guard lock(mutex_);
+            status_.sink_open = false;
+            status_.error = "external backend has no MJPEG frame";
+            next_write = now + frame_interval;
+            continue;
+        }
         if (!sink.is_open()
                 && !sink.Open(
                         config_.device,
                         config_.width,
                         config_.height,
                         config_.fps,
-                        kMaxJpegBytes,
+                        kMaxFrameBytes,
                         &sink_error)) {
             std::lock_guard lock(mutex_);
             status_.sink_open = false;
@@ -294,9 +400,10 @@ void Engine::WriterLoop() {
             next_write = now + std::chrono::seconds(1);
             continue;
         }
-        if (sink.Write(processed_frame, &sink_error)) {
+        if (sink.Write(external_frame, &sink_error)) {
             std::lock_guard lock(mutex_);
             status_.sink_open = true;
+            status_.frame_bus_ready = true;
             ++status_.frames_written;
         } else {
             sink.Close();
@@ -312,17 +419,17 @@ void Engine::WriterLoop() {
     sink.Close();
 }
 
-void Engine::PublishFrame(std::vector<uint8_t>&& jpeg) {
-    if (jpeg.size() < 4 || jpeg.size() > kMaxJpegBytes) {
+void Engine::PublishFrame(SourceFrame&& frame) {
+    if (frame.payload.size() < 4 || frame.payload.size() > kMaxFrameBytes) {
         std::lock_guard lock(mutex_);
         ++status_.frames_dropped;
-        status_.error = "received JPEG frame is empty or exceeds safety limit";
+        status_.error = "received frame is empty or exceeds safety limit";
         return;
     }
-    auto frame = std::make_shared<const std::vector<uint8_t>>(std::move(jpeg));
+    auto next = std::make_shared<const SourceFrame>(std::move(frame));
     {
         std::lock_guard lock(mutex_);
-        latest_frame_ = std::move(frame);
+        latest_frame_ = std::move(next);
         ++latest_generation_;
         ++status_.frames_received;
         status_.source_connected = true;

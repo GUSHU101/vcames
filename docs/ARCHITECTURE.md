@@ -1,45 +1,48 @@
 # 架构与安全边界
 
-## External 与前后替换
+## 两条系统路径
 
-Android 11–15 的 CameraService 只能通过相机 HAL 获得系统相机。VCamES 选择 AOSP 已有的
-External Camera Provider：它监听 `/dev/video*`，把符合 V4L2 capture 规范的节点注册为
-Camera HAL 3.x 外置相机。v4l2loopback 同时提供 output 端给 `vcamesd`、capture 端给 Provider。
+`external` 使用公开 AOSP External Camera Provider：`vcamesd` 把 JPEG 写入
+`/dev/video100`，Provider 注册新的外置 camera ID。它不替代 OEM 前后摄像头。
 
-这条路径不会修改应用进程，不依赖 Xposed，也不使用参考 APK 中的私有符号 hook。
-`front/back/both` 由一个设备构建专用的 Camera HAL adapter 保留原 camera ID 和 metadata，
-仅替换输出 buffer；通用 daemon 通过受限 socket 激活它，并以 `SCM_RIGHTS` 传递
-`memfd-ring-v1` FrameBus，不持有 cameraserver 私有 ABI。
+`front/back/both` 使用精确构建 Camera adapter。adapter 必须保留原 camera ID、facing、
+静态 metadata、capture request/result 语义，仅替换普通预览/录像/拍照输出 buffer。
+secure/protected、RAW、depth 或未知 stream 必须拒绝虚拟帧并回退 OEM pipeline。
+
+运行范围是 Google/Xiaomi/Samsung、Android 11–13（API 30–33）、arm64。HIDL/AIDL 由
+目标 VINTF、服务注册和 ELF 集合实测，不能按品牌或 Android 版本猜测。
 
 ## 组件
 
-| 组件 | 分区/权限 | 职责 |
+| 组件 | 权限/位置 | 职责 |
 |---|---|---|
-| `VCamES` | `system_ext/priv-app`、平台签名、UID 1000 | 配置、SAF 选片、MediaCodec 本地解码、状态 UI |
-| `vcamesd` | `system_ext/bin`、独立 SELinux domain | HTTP MJPEG、变换、限流、V4L2 写入 |
-| v4l2loopback | kernel/vendor_dlkm | `/dev/video100` 环形帧设备 |
-| External Provider | vendor HAL | V4L2 capture → Camera HAL 3.6 |
-| Camera adapter（可选） | vendor HAL/精确 Root payload | 原前后 camera ID → FrameBus 最新帧 |
+| 控制 APK | system 变体或普通 Root 变体 | 配置、SAF 选片、MediaCodec、ROOT 部署、状态 |
+| `vcamesd` | `system_ext` domain 或 Root 模块降权后的 system UID | 来源、变换、限流、FrameBus、V4L2 |
+| v4l2loopback | kernel/vendor_dlkm | external 模式的 `/dev/video100` |
+| External Provider | vendor HAL | V4L2 capture → 新 external camera ID |
+| 精确 Camera adapter | ROM/vendor 或单 OTA Root payload | FrameBus → 原 front/back 输出 buffer |
 
-## 控制协议
+## 帧协议
 
-三个 Linux abstract `AF_UNIX` socket：`vcamesd` 接收文本命令，`vcamesd_frames` 接收
-`VCF1` 魔数和 big-endian 长度前缀 JPEG。服务端使用 `SO_PEERCRED` 拒绝 UID 0/1000
-之外的连接；SELinux 仅允许 `system_app` 连接 `vcamesd` domain。可选
-`vcames-camera-adapter` 接收 ACTIVATE/DEACTIVATE，只应接受 UID 0/系统相机 UID。
+- `VCF2`：本地 MediaCodec 生产者发送 format/width/height/stride/size/PTS + NV21 payload；
+- `VCF1`：只为旧 JPEG producer 保留的兼容入口；
+- FrameBus v2：4 个 16 MiB 槽，`VCFBUS2\0`，latest-frame，sequence lock，包含
+  PTS、arrival、format、stride、rotation 和 flags；
+- 当前发布格式支持 JPEG/NV21/NV12/I420/RGBA，replacement 首选 NV21；
+- memfd 通过 `SCM_RIGHTS` 传递，adapter 必须逐字段校验 header、槽边界和写 epoch。
 
-FrameBus v1 是 3 槽、latest-frame、sequence-lock 共享内存环：header 固定 4 KiB，槽保存
-sequence、PTS、到达时间、宽高、格式和 payload 长度。当前格式为 JPEG；YUV/AHardwareBuffer
-是后续兼容版本，不能在未更新 adapter 的情况下静默改变 wire format。
+控制/推帧 socket 只接受 UID 0、1000 或安装时记录的控制 APK UID；adapter socket 还要做
+`SO_PEERCRED`。协议 v2 按 GET_INFO/PROBE/ATTACH_BUS/ACTIVATE/HEALTH 分阶段确认，必须同时
+确认 `frame_transport=attached`、`pipeline=active` 与 `health=ready`，不能只以“进程存在”
+宣布成功。
 
-## 延迟和故障处理
+Root 模块只以 UID 0 完成节点权限、监听端点和部署前提；`vcamesd` 随后调用
+`setgroups(camera, inet) → setgid(system) → setuid(system) → no_new_privs`，失败则退出，不让媒体链长期
+运行在 UID 0。SELinux 仍保持 Enforcing。
 
-来源线程只保留最新帧，写入线程不会回放积压；超出的 generation 计为 dropped。
-HTTP 断线采用 1–30 秒指数退避，成功连接后重置为 1 秒。`hold_last=false` 时超过阈值关闭 sink；开启时以目标
-FPS 重复最后一帧。单帧上限 16 MiB，分辨率上限 3840×2160。
+## 延迟与失败
 
-## 启动顺序
-
-内核节点必须在 `class core` 之前创建。`vcamesd` 属于 `class core`，启动后先写入
-1280×720 中性 JPEG，固定 loopback 的 MJPEG format；External Provider 属于 `class hal`，
-随后枚举已配置节点。这个顺序避免 Provider 在 format 未设定时忽略 `/dev/video100`。
+来源只保留最新 generation；写线程按目标 FPS 取最新帧并统计丢弃。HTTP 重连为 1–30 秒
+指数退避；半包 socket 2 秒超时；输入不超过 16 MiB/3840×2160。`hold_last=false` 时
+FrameBus 发布序号归零，adapter 应回退 OEM 或停止虚拟输出。连续三次 adapter 启动失败进入
+BootGuard 安全模式。

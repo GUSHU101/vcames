@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidateRange(30, 35)]
-    [int]$Api = 35,
+    [ValidateRange(30, 33)]
+    [int]$Api = 33,
     [string]$NdkPath = '',
     [string]$DaemonBinary = '',
     [string]$ControllerApk = '',
@@ -54,11 +54,21 @@ if ([string]::IsNullOrWhiteSpace($DaemonBinary)) {
     if (-not $cmakeCommand) { throw '未找到 CMake。' }
     $cmakeExe = if ($cmakeCommand.Source) { $cmakeCommand.Source } else { $cmakeCommand.FullName }
 
+    $ninjaCommand = Get-Command 'ninja.exe' -ErrorAction SilentlyContinue
+    if (-not $ninjaCommand) { $ninjaCommand = Get-Command 'ninja' -ErrorAction SilentlyContinue }
+    if (-not $ninjaCommand) {
+        $bundledNinja = 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+        if (Test-Path -LiteralPath $bundledNinja) { $ninjaCommand = Get-Item -LiteralPath $bundledNinja }
+    }
+    if (-not $ninjaCommand) { throw '未找到 Ninja。' }
+    $ninjaExe = if ($ninjaCommand.Source) { $ninjaCommand.Source } else { $ninjaCommand.FullName }
+
     $buildDir = Join-Path $outRoot "android-$Api-arm64"
     $configureArguments = @(
         '-S', (Join-Path $repoRoot 'daemon'),
         '-B', $buildDir,
         '-G', 'Ninja',
+        "-DCMAKE_MAKE_PROGRAM=$ninjaExe",
         "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
         '-DANDROID_ABI=arm64-v8a',
         "-DANDROID_PLATFORM=android-$Api",
@@ -82,6 +92,37 @@ if ($ReplacementAdapter -and -not $CompatibilityManifest) {
 }
 if ($CompatibilityManifest -and -not $ReplacementAdapter) {
     throw '-CompatibilityManifest 只能与 -ReplacementAdapter 一起使用。'
+}
+if ($CompatibilityManifest) {
+    $manifestValues = @{}
+    Get-Content -LiteralPath $CompatibilityManifest | ForEach-Object {
+        if ($_ -match '^([a-z0-9_]+)=(.+)$') { $manifestValues[$matches[1]] = $matches[2] }
+    }
+    $requiredFields = @(
+        'schema', 'vendor_family', 'soc_family', 'camera_hal_transport', 'manufacturer',
+        'product', 'device', 'api', 'system_fingerprint_sha256',
+        'vendor_fingerprint_sha256', 'cameraserver_sha256',
+        'camera_provider_sha256', 'vendor_camera_libraries_sha256',
+        'graphics_stack_sha256', 'adapter_sha256', 'compatibility_id'
+    )
+    foreach ($field in $requiredFields) {
+        if (-not $manifestValues.ContainsKey($field)) {
+            throw "Compatibility manifest 缺少字段：$field"
+        }
+    }
+    if ($manifestValues['vendor_family'] -notin @('google', 'xiaomi', 'samsung')) {
+        throw "Compatibility manifest vendor_family 不受支持：$($manifestValues['vendor_family'])"
+    }
+    if ([int]$manifestValues['api'] -ne $Api) {
+        throw "构建 API $Api 与 Compatibility manifest API $($manifestValues['api']) 不一致"
+    }
+    if ($manifestValues['schema'] -ne '2') {
+        throw "Compatibility manifest schema 必须为 2：$($manifestValues['schema'])"
+    }
+    $actualAdapterHash = (Get-FileHash -LiteralPath $ReplacementAdapter -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($manifestValues['adapter_sha256'].ToLowerInvariant() -ne $actualAdapterHash) {
+        throw 'Compatibility manifest adapter_sha256 与传入适配器不匹配'
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {

@@ -9,7 +9,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
-import android.graphics.YuvImage;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaCodec;
@@ -22,7 +21,6 @@ import android.os.IBinder;
 import android.os.SystemClock;
 import android.util.Log;
 
-import java.io.ByteArrayOutputStream;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -149,7 +147,7 @@ public final class LocalMediaService extends Service {
         VCamConfig config = VCamConfig.load(this);
         while (!stop.get()) {
             try (FramePushClient sender = new FramePushClient()) {
-                decodeOnce(uri, config.fps, config.jpegQuality, sender, stop);
+                decodeOnce(uri, config.fps, sender, stop);
             } catch (IOException | RuntimeException e) {
                 Log.e(TAG, "Local video pipeline failed", e);
                 if (!sleepInterruptibly(1000, stop)) {
@@ -162,7 +160,6 @@ public final class LocalMediaService extends Service {
     private void decodeOnce(
             Uri uri,
             int maximumFps,
-            int jpegQuality,
             FramePushClient sender,
             AtomicBoolean stop) throws IOException {
         try (android.content.res.AssetFileDescriptor asset =
@@ -217,7 +214,12 @@ public final class LocalMediaService extends Service {
                         if (lastSentNs[0] != 0 && now - lastSentNs[0] < minimumFrameIntervalNs) {
                             return;
                         }
-                        sender.send(imageToJpeg(image, jpegQuality));
+                        Nv21Frame frame = imageToNv21(image);
+                        sender.sendNv21(
+                                frame.payload,
+                                frame.width,
+                                frame.height,
+                                now);
                         lastSentNs[0] = now;
                     } catch (IOException | RuntimeException e) {
                         frameError.compareAndSet(
@@ -225,7 +227,6 @@ public final class LocalMediaService extends Service {
                                 e instanceof IOException
                                         ? (IOException) e
                                         : new IOException("Image conversion failed", e));
-                        stop.set(true);
                     }
                 }, new Handler(imageThread.getLooper()));
 
@@ -352,13 +353,15 @@ public final class LocalMediaService extends Service {
         }
     }
 
-    private static byte[] imageToJpeg(Image image, int quality) throws IOException {
+    private static Nv21Frame imageToNv21(Image image) throws IOException {
         if (image.getFormat() != ImageFormat.YUV_420_888 || image.getPlanes().length < 3) {
             throw new IOException("Decoder did not produce YUV_420_888 images");
         }
         Rect crop = image.getCropRect();
-        int width = crop.width() & ~1;
-        int height = crop.height() & ~1;
+        int cropLeft = crop.left & ~1;
+        int cropTop = crop.top & ~1;
+        int width = (crop.right - cropLeft) & ~1;
+        int height = (crop.bottom - cropTop) & ~1;
         if (width <= 0 || height <= 0) {
             throw new IOException("Decoder produced an empty image");
         }
@@ -366,8 +369,8 @@ public final class LocalMediaService extends Service {
         Image.Plane[] planes = image.getPlanes();
         copyPlane(
                 planes[0],
-                crop.left,
-                crop.top,
+                cropLeft,
+                cropTop,
                 width,
                 height,
                 nv21,
@@ -382,20 +385,15 @@ public final class LocalMediaService extends Service {
                 int output = chromaOffset + (row * chromaWidth + column) * 2;
                 nv21[output] = planeByte(
                         planes[2],
-                        crop.left / 2 + column,
-                        crop.top / 2 + row);
+                        cropLeft / 2 + column,
+                        cropTop / 2 + row);
                 nv21[output + 1] = planeByte(
                         planes[1],
-                        crop.left / 2 + column,
-                        crop.top / 2 + row);
+                        cropLeft / 2 + column,
+                        cropTop / 2 + row);
             }
         }
-        ByteArrayOutputStream jpeg = new ByteArrayOutputStream(width * height / 2);
-        YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, width, height, null);
-        if (!yuvImage.compressToJpeg(new Rect(0, 0, width, height), quality, jpeg)) {
-            throw new IOException("Android JPEG encoder rejected the decoded frame");
-        }
-        return jpeg.toByteArray();
+        return new Nv21Frame(nv21, width, height);
     }
 
     private static void copyPlane(
@@ -436,5 +434,17 @@ public final class LocalMediaService extends Service {
             SystemClock.sleep(Math.min(remaining, 100));
         }
         return false;
+    }
+
+    private static final class Nv21Frame {
+        final byte[] payload;
+        final int width;
+        final int height;
+
+        Nv21Frame(byte[] payload, int width, int height) {
+            this.payload = payload;
+            this.width = width;
+            this.height = height;
+        }
     }
 }

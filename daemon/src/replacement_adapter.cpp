@@ -9,6 +9,8 @@
 
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace vcames {
 namespace {
@@ -145,6 +147,28 @@ bool Request(
     return ok;
 }
 
+bool RequestAndRequire(
+        const std::string& request,
+        int passed_fd,
+        const std::vector<std::string_view>& required_fields,
+        const char* phase,
+        std::string* error) {
+    std::string response;
+    if (!Request(request, passed_fd, &response, error)) {
+        return false;
+    }
+    for (std::string_view field : required_fields) {
+        if (response.find(field) == std::string::npos) {
+            if (error != nullptr) {
+                *error = std::string("replacement adapter ") + phase
+                        + " response is missing " + std::string(field);
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 bool ActivateReplacementAdapter(
@@ -162,16 +186,66 @@ bool ActivateReplacementAdapter(
         }
         return false;
     }
-    std::ostringstream request;
-    request << "ACTIVATE\n"
+    if (!RequestAndRequire(
+                "GET_INFO\nadapter_protocol=2\n.\n",
+                -1,
+                {"adapter_protocol=2", "api=30-33", "metadata_policy=preserve-oem"},
+                "GET_INFO",
+                error)
+            || !RequestAndRequire(
+                "PROBE\nadapter_protocol=2\nrequire_exact_build=1\n.\n",
+                -1,
+                {"adapter_protocol=2", "compatibility=exact-build",
+                 "secure_stream_policy=reject"},
+                "PROBE",
+                error)) {
+        DeactivateReplacementAdapter();
+        return false;
+    }
+
+    std::ostringstream attach;
+    attach << "ATTACH_BUS\n"
+            << "adapter_protocol=2\n"
+            << frame_bus_descriptor
+            << ".\n";
+    if (!RequestAndRequire(
+                attach.str(),
+                frame_bus_fd,
+                {"adapter_protocol=2", "frame_transport=attached", "bus_version=2"},
+                "ATTACH_BUS",
+                error)) {
+        DeactivateReplacementAdapter();
+        return false;
+    }
+
+    std::ostringstream activate;
+    activate << "ACTIVATE\n"
+            << "adapter_protocol=2\n"
             << "target=" << config.target << '\n'
-            << "device=" << config.device << '\n'
             << "width=" << config.width << '\n'
             << "height=" << config.height << '\n'
             << "fps=" << config.fps << '\n'
-            << frame_bus_descriptor
+            << "metadata_policy=preserve-oem\n"
+            << "secure_stream_policy=reject\n"
+            << "failure_policy=oem-passthrough\n"
             << ".\n";
-    return Request(request.str(), frame_bus_fd, nullptr, error);
+    if (!RequestAndRequire(
+                activate.str(),
+                -1,
+                {"adapter_protocol=2", "pipeline=active", "metadata=preserved"},
+                "ACTIVATE",
+                error)
+            || !RequestAndRequire(
+                "HEALTH\nadapter_protocol=2\n.\n",
+                -1,
+                {"adapter_protocol=2", "health=ready",
+                 "frame_transport=attached", "pipeline=active"},
+                "HEALTH",
+                error)) {
+        DeactivateReplacementAdapter();
+        return false;
+    }
+    return true;
 }
 
 void DeactivateReplacementAdapter() {
