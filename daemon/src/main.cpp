@@ -253,7 +253,7 @@ void HandleControlClient(int fd, vcames::Engine* engine) {
         return;
     }
     switch (command.type) {
-        case vcames::CommandType::kStart:
+        case vcames::CommandType::kStart: {
             // Stop the previous health monitor before deactivating its
             // adapter, otherwise a concurrent reconnect can race a reconfigure.
             engine->Stop();
@@ -263,26 +263,25 @@ void HandleControlClient(int fd, vcames::Engine* engine) {
                         + vcames::JsonEscape(error) + "\"}\n");
                 return;
             }
-            if (command.config.target != "external") {
-                const int frame_bus_fd = engine->DuplicateFrameBusFd(&error);
-                if (frame_bus_fd < 0 || !vcames::ActivateReplacementAdapter(
-                            command.config,
-                            frame_bus_fd,
-                            engine->FrameBusDescriptor(),
-                            &error)) {
-                    if (frame_bus_fd >= 0) {
-                        close(frame_bus_fd);
-                    }
-                    engine->Stop();
-                    WriteAll(fd, "{\"ok\":false,\"error\":\""
-                            + vcames::JsonEscape(error) + "\"}\n");
-                    return;
+            const int frame_bus_fd = engine->DuplicateFrameBusFd(&error);
+            if (frame_bus_fd < 0 || !vcames::ActivateReplacementAdapter(
+                        command.config,
+                        frame_bus_fd,
+                        engine->FrameBusDescriptor(),
+                        &error)) {
+                if (frame_bus_fd >= 0) {
+                    close(frame_bus_fd);
                 }
-                close(frame_bus_fd);
-                engine->SetReplacementAttached(true);
+                engine->Stop();
+                WriteAll(fd, "{\"ok\":false,\"error\":\""
+                        + vcames::JsonEscape(error) + "\"}\n");
+                return;
             }
+            close(frame_bus_fd);
+            engine->SetReplacementAttached(true);
             WriteAll(fd, engine->StatusJson() + "\n");
             return;
+        }
         case vcames::CommandType::kStop:
             engine->Stop();
             vcames::DeactivateReplacementAdapter();
@@ -456,25 +455,6 @@ int main(int argc, char** argv) {
     }
 
     vcames::Engine engine;
-    // Configure the loopback device before the external Camera Provider scans
-    // /dev/video*. Holding a neutral frame also gives camera clients a defined
-    // image until the controller supplies a real source.
-    vcames::Config standby_config;
-    standby_config.url = "push://local";
-    std::vector<uint8_t> standby_frame;
-    if (!engine.Start(standby_config, &error)
-            || !vcames::CreateSolidJpeg(
-                    standby_config.width,
-                    standby_config.height,
-                    16,
-                    16,
-                    16,
-                    standby_config.jpeg_quality,
-                    &standby_frame,
-                    &error)
-            || !engine.PushFrame(std::move(standby_frame), &error)) {
-        Log("standby initialization failed: " + error);
-    }
     Log("ready");
     std::thread frame_server(FrameServer, frame_listener, &engine);
     ControlServer(control_listener, &engine);

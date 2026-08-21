@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">VCamES</string>
-    <string name="diagnostics_collecting">正在生成不含用户媒体的设备、Camera2 与 Root 诊断包…</string>
+    <string name="diagnostics_collecting">正在运行 DeviceProbe、Profile 与 Root 链路自检…</string>
     <string name="diagnostics_exported">diagnostics.zip 已导出。请将它与目标 OTA 适配包一同保存。</string>
 </resources>

@@ -1,92 +1,12 @@
-# 前置/后置摄像头替换适配器
+# 前后摄替换协议
 
-## 必要边界
+adapter 是设备 + OTA 专用组件，必须保留 OEM camera ID、facing、静态 metadata、时间戳
+和客户端协商边界。secure/protected、RAW、depth 等不能安全替换的流必须拒绝并回到 OEM。
 
-前后替换不是 external camera。adapter 必须在 OEM Camera HAL/provider 可维护边界中保留
-原 camera ID 与 metadata，并只替换允许的输出 buffer。定制 ROM 优先实现 HIDL/AIDL
-Provider proxy；Root 原厂系统只能维护与完整 OTA 绑定的 adapter。
+启动协议固定为 adapter protocol 2：`GET_INFO` → `PROBE(require_exact_build=1)` →
+`ATTACH_BUS` → `ACTIVATE` → `HEALTH`。FrameBus FD 为只读、定长、密封 memfd；adapter
+响应必须确认 `memory_access=read-only`、`metadata=preserved` 和
+`failure_policy=oem-passthrough`。
 
-本项目不提供 ptrace/ShadowHook 通用注入器，不关闭 SELinux，也不会在 ABI/hash 不匹配时
-尝试启动。Google、Xiaomi 分别还要按 Qualcomm/Tensor/MediaTek 与实际
-HIDL/AIDL transport 分支实现。
-
-## adapter 服务协议 v2
-
-Root Bridge 启动：
-
-```text
-vcames-camera-adapter --serve --socket vcames-camera-adapter \
-  --manifest /data/adb/modules/vcames/compatibility.properties
-```
-
-daemon 通过 Linux abstract socket 依次执行：
-
-```text
-GET_INFO → PROBE → ATTACH_BUS → ACTIVATE → HEALTH
-```
-
-`GET_INFO` 必须声明 protocol v2、API 30–33 与 OEM metadata policy；`PROBE` 必须确认当前
-完整构建兼容并拒绝 secure stream。`ATTACH_BUS` 在首次 `sendmsg` 附带 FrameBus memfd：
-
-```text
-ATTACH_BUS
-adapter_protocol=2
-transport=memfd-ring-v2
-bus_version=2
-header_size=4096
-slot_count=4
-slot_capacity=16777216
-memory_access=read-only
-formats=jpeg,nv21,nv12,i420,rgba8888
-preferred_format=nv21
-.
-```
-
-附着成功必须回复：
-
-```text
-OK
-adapter_protocol=2
-frame_transport=attached
-bus_version=2
-memory_access=read-only
-.
-```
-
-然后 `ACTIVATE` 提交 target/width/height/fps 与 metadata/secure/failure policy，adapter 必须
-回复 `pipeline=active`、`metadata=preserved`。最后 `HEALTH` 必须同时确认
-`health=ready`、`frame_transport=attached`、`pipeline=active`；任何阶段失败都会发送
-`DEACTIVATE` 并停止 replacement。
-
-收到的 memfd 必须是 `O_RDONLY` 且具备 grow/shrink/seal 密封；若 adapter 可以写入 FD，
-必须拒绝附着。仓库的 `SharedFrameBusReader` 提供规范化持久只读映射，验证
-`VCFBUS2\0`、版本、精确映射长度、所有槽边界、format/stride/尺寸和偶数稳定
-`write_epoch`，按 `published_sequence` 只取最新帧。`published_sequence=0`、adapter 错误或
-daemon 死亡时按 `failure_policy` 回退 OEM 原相机。secure/protected、RAW、depth 和未知 stream
-不得写入虚拟内容。只返回 `OK` 而未确认协议/FD 的旧 adapter 会被拒绝。
-
-激活后 daemon 每 2 秒发送一次 `HEALTH`。adapter 进程退出时 Root service 以指数退避重启；
-daemon 发现新的服务后会重新执行 ATTACH_BUS/ACTIVATE 并传递新的只读 FD。重连计数只说明
-协议恢复，仍需 Camera2 内容测试证明真实前后摄像头输出已被替换。
-
-停止请求为：
-
-```text
-DEACTIVATE
-.
-```
-
-## 精确构建与打包
-
-先连接目标手机、允许 ADB shell ROOT，生成清单，再同时传入 adapter：
-
-```powershell
-.\tools\adb\capture-camera-compatibility.ps1 `
-  -AdapterPath C:\device-build\vcames-camera-adapter
-
-.\tools\root\build-root-module.ps1 -Api 33 `
-  -ReplacementAdapter C:\device-build\vcames-camera-adapter `
-  -CompatibilityManifest .\out\camera-compatibility.properties
-```
-
-没有这两个文件时构建仍可用于 external/控制层，但 front/back/both 必须明确失败。
+daemon 每两秒健康检查并重新附着。源断流超过 800 ms 会 invalidate FrameBus，而不是无限
+保持最后一帧。adapter 连续三次启动/运行故障后 BootGuard 写入安全模式标记，不再尝试替换。

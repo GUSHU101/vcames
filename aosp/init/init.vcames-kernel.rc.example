@@ -1,4 +1,0 @@
-# Device-tree example. Import/copy this only when v4l2loopback is built as a
-# vendor_dlkm module. The module must be loaded before class core starts.
-on early-init
-    exec u:r:vendor_modprobe:s0 root root -- /vendor/bin/modprobe -a v4l2loopback

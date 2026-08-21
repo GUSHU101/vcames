@@ -1,2 +1,0 @@
-# Append this rule to the target device's vendor ueventd.rc.
-/dev/video100    0660    system    camera

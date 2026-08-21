@@ -8,6 +8,12 @@ val releaseProperties = Properties().apply {
     rootProject.file("version.properties").inputStream().use(::load)
 }
 
+val syncProfileCatalog = tasks.register<Copy>("syncProfileCatalog") {
+    from(rootProject.file("profiles/catalog.json"))
+    into(project.layout.buildDirectory.dir("generated/profileAssets"))
+    rename { "profile-catalog.json" }
+}
+
 android {
     namespace = "io.github.gushu101.vcames"
     compileSdk = 35
@@ -31,17 +37,6 @@ android {
         }
     }
 
-    flavorDimensions += "deployment"
-    productFlavors {
-        create("system") {
-            dimension = "deployment"
-        }
-        create("root") {
-            dimension = "deployment"
-            versionNameSuffix = "-root"
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -57,8 +52,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
-    sourceSets.getByName("root").assets.srcDir(
+    sourceSets.getByName("main").assets.srcDir(
         project.layout.buildDirectory.dir("generated/rootBridgeAssets")
+    )
+    sourceSets.getByName("main").assets.srcDir(
+        project.layout.buildDirectory.dir("generated/profileAssets")
     )
 
     externalNativeBuild {
@@ -79,4 +77,8 @@ android {
             "OldTargetApi"
         )
     }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(syncProfileCatalog)
 }

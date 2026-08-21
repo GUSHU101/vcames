@@ -15,21 +15,19 @@ void TestCommand() {
     const std::string request =
             "START\n"
             "url=http://127.0.0.1:8888/live.mjpg?token=a=b\n"
-            "device=/dev/video100\n"
             "target=both\n"
             "width=1920\nheight=1080\nfps=30\nrotation=90\n"
-            "mirror=1\nhold_last=0\nstale_timeout_ms=2500\njpeg_quality=88\n.\n";
+            "mirror=1\n.\n";
     assert(vcames::ParseCommand(request, &command, &error));
     assert(command.type == vcames::CommandType::kStart);
     assert(command.config.width == 1920);
     assert(command.config.target == "both");
     assert(command.config.rotation == 90);
     assert(command.config.mirror);
-    assert(!command.config.hold_last);
 
     assert(!vcames::ParseCommand("START\nwidth=nope\n.\n", &command, &error));
     assert(!vcames::ParseCommand("START\nwidth=641\nheight=480\n.\n", &command, &error));
-    assert(!vcames::ParseCommand("START\ndevice=/dev/videofoo\n.\n", &command, &error));
+    assert(!vcames::ParseCommand("START\ntarget=external\n.\n", &command, &error));
     assert(!vcames::ParseCommand("START\ntarget=sideways\n.\n", &command, &error));
     assert(!vcames::ParseCommand("UNKNOWN\n.\n", &command, &error));
     assert(vcames::ParseCommand("STATUS\n.\n", &command, &error));

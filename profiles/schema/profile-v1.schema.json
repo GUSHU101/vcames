@@ -54,9 +54,8 @@
     "capabilities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["external", "front", "back"],
+      "required": ["front", "back"],
       "properties": {
-        "external": {"type": "boolean"},
         "front": {"type": "boolean"},
         "back": {"type": "boolean"}
       }

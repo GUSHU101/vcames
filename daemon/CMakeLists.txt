@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(MSVC)
+    add_compile_options(/EHsc)
+endif()
+
 if(ANDROID)
     add_executable(vcamesd
         src/config.cpp
@@ -16,7 +20,6 @@ if(ANDROID)
         src/network_policy.cpp
         src/replacement_adapter.cpp
         src/shared_frame_bus.cpp
-        src/v4l2_sink.cpp
     )
     target_include_directories(vcamesd PRIVATE include third_party/stb)
     target_compile_options(vcamesd PRIVATE -Wall -Wextra -Werror)

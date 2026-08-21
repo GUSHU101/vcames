@@ -1,13 +1,18 @@
 # 发布门禁
 
-单个 `compatibility_id` 只有全部满足以下条件才能标记 `VERIFIED`：
+面向用户只发布一个内置 Root Bridge 的 APK。模块 ZIP、诊断和中间控制产物只进入 developer
+artifact。
 
-1. 设备身份：model/product/device、API、Build ID、安全补丁、region 与 system/vendor fingerprint 哈希完全一致。
-2. 产物身份：daemon、proxy、adapter、Provider、内核模块和发布 ZIP/APK 的 SHA-256 已记录并可复现。
-3. 安全门禁：SELinux enforcing；普通应用只能访问 public proxy；ROOT private socket 不向 `untrusted_app` 暴露；不使用 Xposed/Zygisk 注入。
-4. 功能门禁：Camera2 枚举；external 或前/后目标的真实画面；NV21/YUV 格式、方向、镜像、裁切、PTS、断流策略；通话/录像/前后台切换。
-5. 稳定性门禁：冷启动、热重启、daemon/proxy/provider/adapter 故障恢复，至少 8 小时持续运行和 100 次启动/停止；无 cameraserver 循环崩溃。
-6. OTA 门禁：任何 fingerprint、Camera ELF、graphics stack 或 kernel/KMI 变化都会使旧 Profile 失效，回退到 fail-closed。
-7. 隐私门禁：`diagnostics.zip` 不含用户视频、帧、凭据或账号数据；报告已脱敏。
+发布必须同时满足：
 
-CI 只证明源码可构建、schema 合法和主机测试通过，不能替代真机验收。当前 Profile catalog 为空，因此项目状态是“工程链路已实现、产品设备尚未 VERIFIED”。
+1. Android assemble/lint、host native tests、API 30 arm64 daemon 构建全部通过；
+2. shell 语法、模块 ZIP、APK 内置资产和 Profile catalog 通过 CI；
+3. 无 system flavor/shared UID、external/V4L2、Xposed/Zygisk 或 ROOT 品牌猜测；
+4. 设备包 Profile 为 canonical `VERIFIED`，Ed25519 签名有效，所有哈希和
+   `compatibility_id` 精确匹配；
+5. 真机完成前/后摄内容、方向、分辨率、并发、应用切换、断流、adapter kill、重启和 OTA
+   负向测试；
+6. 不包含 OEM 私有 blob、密钥、用户媒体、账号或凭据。
+
+仓库 catalog 为空时只能发布通用控制/诊断构建，状态必须 fail closed，不能宣称摄像头替换
+已验证。

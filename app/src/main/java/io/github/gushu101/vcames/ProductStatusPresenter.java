@@ -17,7 +17,7 @@ final class ProductStatusPresenter {
             boolean cameraReady = status.optBoolean("camera_ready", false);
             boolean frameBusReady = status.optBoolean("frame_bus_ready", false);
             boolean replacementAttached = status.optBoolean("replacement_attached", false);
-            String target = status.optString("target", "external");
+            String target = status.optString("target", "front");
             String error = status.optString("error", "");
             String adapterError = status.optString("adapter_error", "");
             String errors = (error + " " + adapterError).trim();
@@ -33,15 +33,12 @@ final class ProductStatusPresenter {
             } else if (!connected) {
                 state = "LIMITED";
                 next = "检查本地媒体授权或私网 MJPEG 地址";
-            } else if ("external".equals(target) && cameraReady) {
-                state = "READY_UNVERIFIED";
-                next = "在目标 OTA 上完成画面、方向与压力验收";
-            } else if (!"external".equals(target) && frameBusReady && replacementAttached) {
+            } else if (frameBusReady && replacementAttached) {
                 state = "READY_UNVERIFIED";
                 next = "前/后摄替换已附着，仍需目标 OTA 内容验收";
             } else {
                 state = "LIMITED";
-                next = "当前链路未完全就绪；核对 Provider 或精确固件 Profile";
+                next = "当前链路未完全就绪；核对精确固件 Profile 与适配器";
             }
 
             StringBuilder view = new StringBuilder();
@@ -49,7 +46,7 @@ final class ProductStatusPresenter {
                     .append("\n进程：").append(running ? "运行" : "停止")
                     .append(" · 视频源：").append(connected ? "已连接" : "未连接")
                     .append("\n目标：").append(target)
-                    .append(" · External：").append(cameraReady ? "就绪" : "未就绪")
+                    .append(" · 替换输出：").append(cameraReady ? "就绪" : "未就绪")
                     .append(" · FrameBus：").append(frameBusReady ? "就绪" : "未就绪")
                     .append(" · 适配器：").append(replacementAttached ? "已附着" : "未附着")
                     .append("\n验证级别：UNVERIFIED（必须按设备/OTA 验收）")

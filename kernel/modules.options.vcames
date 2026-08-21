@@ -1,1 +1,0 @@
-options v4l2loopback video_nr=100 card_label="VCamES" exclusive_caps=0 max_buffers=4

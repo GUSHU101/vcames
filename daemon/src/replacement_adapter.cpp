@@ -176,10 +176,6 @@ bool ActivateReplacementAdapter(
         int frame_bus_fd,
         const std::string& frame_bus_descriptor,
         std::string* error) {
-    if (config.target == "external") {
-        DeactivateReplacementAdapter();
-        return true;
-    }
     if (frame_bus_fd < 0 || frame_bus_descriptor.empty()) {
         if (error != nullptr) {
             *error = "replacement mode requires a shared frame transport";

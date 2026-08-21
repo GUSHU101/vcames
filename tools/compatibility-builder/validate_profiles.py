@@ -108,7 +108,9 @@ def validate_profile(path: Path, expected_id: str, repository_root: Path) -> Non
     for key, value in hashes.items():
         require_hex(value, f"{path}.hashes.{key}")
     capabilities = required_object(profile, "capabilities", str(path))
-    for key in ("external", "front", "back"):
+    if set(capabilities) != {"front", "back"}:
+        raise ValidationError(f"{path}.capabilities must contain only front and back")
+    for key in ("front", "back"):
         if not isinstance(capabilities.get(key), bool):
             raise ValidationError(f"{path}.capabilities.{key} must be boolean")
     resources = required_object(profile, "resources", str(path))

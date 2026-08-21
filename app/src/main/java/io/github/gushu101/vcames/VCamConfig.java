@@ -5,64 +5,43 @@ import android.content.SharedPreferences;
 
 import java.util.Locale;
 
+/** User choices plus fixed, fail-safe runtime policy for front/back replacement. */
 final class VCamConfig {
     static final String PREFS = "vcames";
 
     final String url;
-    final String device;
     final String target;
+    final String outputPreset;
     final int width;
     final int height;
     final int fps;
     final int rotation;
     final boolean mirror;
-    final boolean holdLast;
-    final int staleTimeoutMs;
-    final int jpegQuality;
     final boolean startOnBoot;
 
-    VCamConfig(
-            String url,
-            String device,
-            String target,
-            int width,
-            int height,
-            int fps,
-            int rotation,
-            boolean mirror,
-            boolean holdLast,
-            int staleTimeoutMs,
-            int jpegQuality,
-            boolean startOnBoot) {
+    VCamConfig(String url, String target, String outputPreset, int rotation,
+            boolean mirror, boolean startOnBoot) {
         this.url = url;
-        this.device = device;
         this.target = normalizeTarget(target);
-        this.width = width;
-        this.height = height;
-        this.fps = fps;
-        this.rotation = rotation;
+        this.outputPreset = normalizePreset(outputPreset);
+        int[] dimensions = presetDimensions(this.outputPreset);
+        width = dimensions[0];
+        height = dimensions[1];
+        fps = dimensions[2];
+        this.rotation = normalizeRotation(rotation);
         this.mirror = mirror;
-        this.holdLast = holdLast;
-        this.staleTimeoutMs = staleTimeoutMs;
-        this.jpegQuality = jpegQuality;
         this.startOnBoot = startOnBoot;
     }
 
     static VCamConfig load(Context context) {
-        SharedPreferences p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        SharedPreferences values = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         return new VCamConfig(
-                p.getString("url", "http://192.168.1.10:8888/live.mjpg"),
-                p.getString("device", "/dev/video100"),
-                p.getString("target", "external"),
-                p.getInt("width", 1280),
-                p.getInt("height", 720),
-                p.getInt("fps", 30),
-                normalizeRotation(p.getInt("rotation", 0)),
-                p.getBoolean("mirror", false),
-                p.getBoolean("hold_last", true),
-                p.getInt("stale_timeout_ms", 3000),
-                p.getInt("jpeg_quality", 90),
-                p.getBoolean("start_on_boot", false));
+                values.getString("url", "http://192.168.1.10:8888/live.mjpg"),
+                values.getString("target", "front"),
+                values.getString("output_preset", "auto"),
+                values.getInt("rotation", 0),
+                values.getBoolean("mirror", false),
+                values.getBoolean("start_on_boot", false));
     }
 
     static String loadLocalUri(Context context) {
@@ -71,78 +50,51 @@ final class VCamConfig {
     }
 
     static void saveLocalUri(Context context, String uri) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString("local_uri", uri)
-                .apply();
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString("local_uri", uri).apply();
     }
 
     void save(Context context) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putString("url", url)
-                .putString("device", device)
                 .putString("target", target)
-                .putInt("width", width)
-                .putInt("height", height)
-                .putInt("fps", fps)
+                .putString("output_preset", outputPreset)
                 .putInt("rotation", rotation)
                 .putBoolean("mirror", mirror)
-                .putBoolean("hold_last", holdLast)
-                .putInt("stale_timeout_ms", staleTimeoutMs)
-                .putInt("jpeg_quality", jpegQuality)
                 .putBoolean("start_on_boot", startOnBoot)
+                .remove("device")
+                .remove("width")
+                .remove("height")
+                .remove("fps")
+                .remove("hold_last")
+                .remove("stale_timeout_ms")
+                .remove("jpeg_quality")
                 .apply();
     }
 
     String toStartCommand() {
         validate();
-        return String.format(
-                Locale.US,
-                "START\nurl=%s\ndevice=%s\ntarget=%s\nwidth=%d\nheight=%d\nfps=%d\nrotation=%d\n"
-                        + "mirror=%d\nhold_last=%d\nstale_timeout_ms=%d\njpeg_quality=%d\n.\n",
-                url,
-                device,
-                target,
-                width,
-                height,
-                fps,
-                rotation,
-                mirror ? 1 : 0,
-                holdLast ? 1 : 0,
-                staleTimeoutMs,
-                jpegQuality);
+        return String.format(Locale.US,
+                "START\nurl=%s\ntarget=%s\nwidth=%d\nheight=%d\nfps=%d\n"
+                        + "rotation=%d\nmirror=%d\n.\n",
+                url, target, width, height, fps, rotation, mirror ? 1 : 0);
     }
 
     private void validate() {
         if (!url.startsWith("http://") && !url.equals("push://local")) {
-            throw new IllegalArgumentException("来源必须是 http:// MJPEG 或本地推帧");
+            throw new IllegalArgumentException("来源必须是 http:// MJPEG 或本地视频");
         }
         if (url.indexOf('\n') >= 0 || url.indexOf('\r') >= 0) {
             throw new IllegalArgumentException("URL 不能包含换行");
         }
-        if (!device.matches("/dev/video[0-9]+")) {
-            throw new IllegalArgumentException("设备路径应类似 /dev/video100");
-        }
-        if (!target.equals("external") && !target.equals("front")
-                && !target.equals("back") && !target.equals("both")) {
+        if (!target.equals("front") && !target.equals("back") && !target.equals("both")) {
             throw new IllegalArgumentException("摄像头替换目标无效");
         }
-        if (width < 160 || width > 3840 || height < 120 || height > 2160) {
-            throw new IllegalArgumentException("分辨率超出 160×120 到 3840×2160");
-        }
-        if ((width & 1) != 0 || (height & 1) != 0) {
-            throw new IllegalArgumentException("宽度和高度必须是偶数");
-        }
-        if (fps < 1 || fps > 60) {
-            throw new IllegalArgumentException("FPS 必须为 1–60");
-        }
-        if (jpegQuality < 40 || jpegQuality > 100) {
-            throw new IllegalArgumentException("JPEG 质量必须为 40–100");
-        }
-        if (staleTimeoutMs < 250 || staleTimeoutMs > 60000) {
-            throw new IllegalArgumentException("断流超时必须为 250–60000 ms");
-        }
+    }
+
+    private static int[] presetDimensions(String preset) {
+        if ("1080p".equals(preset)) return new int[]{1920, 1080, 30};
+        return new int[]{1280, 720, 30};
     }
 
     private static int normalizeRotation(int rotation) {
@@ -150,7 +102,11 @@ final class VCamConfig {
     }
 
     private static String normalizeTarget(String target) {
-        return target != null && (target.equals("front") || target.equals("back")
-                || target.equals("both")) ? target : "external";
+        if ("back".equals(target) || "both".equals(target)) return target;
+        return "front";
+    }
+
+    private static String normalizePreset(String preset) {
+        return "1080p".equals(preset) || "720p".equals(preset) ? preset : "auto";
     }
 }

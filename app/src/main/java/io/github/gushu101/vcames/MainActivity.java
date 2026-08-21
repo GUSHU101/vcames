@@ -44,7 +44,7 @@ public final class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION_REQUEST = 1003;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final DeploymentBridge deploymentBridge = DeploymentBridge.create();
+    private final DeploymentManager deploymentManager = new DeploymentManager();
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "vcames-ui-io");
         thread.setDaemon(true);
@@ -52,17 +52,11 @@ public final class MainActivity extends Activity {
     });
 
     private EditText urlInput;
-    private EditText deviceInput;
-    private EditText widthInput;
-    private EditText heightInput;
-    private EditText fpsInput;
-    private EditText staleInput;
-    private EditText qualityInput;
     private Spinner sourceInput;
     private Spinner targetInput;
+    private Spinner outputPresetInput;
     private Spinner rotationInput;
     private CheckBox mirrorInput;
-    private CheckBox holdLastInput;
     private CheckBox bootInput;
     private TextView statusView;
     private TextView localMediaView;
@@ -95,13 +89,6 @@ public final class MainActivity extends Activity {
         populate(VCamConfig.load(this));
         localMediaUri = VCamConfig.loadLocalUri(this);
         updateLocalMediaLabel();
-        if (Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                        != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(
-                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
-                    NOTIFICATION_PERMISSION_REQUEST);
-        }
     }
 
     @Override
@@ -157,19 +144,19 @@ public final class MainActivity extends Activity {
         root.addView(statusView, matchWithBottom(16));
 
         deploymentView = new TextView(this);
-        deploymentView.setText("部署状态尚未检查。ROOT 版支持 KernelSU/Magisk 能力检测；"
-                + "系统版不会调用 su。");
+        deploymentView.setText("部署状态尚未检查。应用只验证 uid 0 和实际模块安装能力，"
+                + "不会猜测 ROOT 管理器品牌。");
         deploymentView.setTextSize(13);
         deploymentView.setTextColor(Color.rgb(45, 55, 72));
         root.addView(deploymentView, matchWithBottom(6));
 
         Button deploy = new Button(this);
-        deploy.setText(deploymentBridge.actionLabel());
+        deploy.setText(deploymentManager.actionLabel());
         deploy.setOnClickListener(view -> authorizeAndDeploy());
         root.addView(deploy, matchWithBottom(14));
 
         Button diagnostics = new Button(this);
-        diagnostics.setText("生成并导出兼容性诊断");
+        diagnostics.setText("运行自检并导出诊断");
         diagnostics.setOnClickListener(view -> exportDiagnostics());
         root.addView(diagnostics, matchWithBottom(14));
 
@@ -188,7 +175,7 @@ public final class MainActivity extends Activity {
         targetInput.setAdapter(new ArrayAdapter<>(
                 this,
                 android.R.layout.simple_spinner_dropdown_item,
-                new String[]{"外置相机（通用）", "前置摄像头", "后置摄像头", "前置 + 后置"}));
+                new String[]{"前置摄像头", "后置摄像头", "前置 + 后置"}));
         root.addView(targetInput, matchWithBottom(8));
 
         LinearLayout localMediaRow = horizontalRow();
@@ -206,13 +193,13 @@ public final class MainActivity extends Activity {
         localMediaRow.addView(localMediaView, mediaParams);
         root.addView(localMediaRow, matchWithBottom(8));
 
-        deviceInput = addTextField(root, "V4L2 设备", InputType.TYPE_CLASS_TEXT);
-
-        LinearLayout dimensions = horizontalRow();
-        widthInput = addCompactNumber(dimensions, "宽度");
-        heightInput = addCompactNumber(dimensions, "高度");
-        fpsInput = addCompactNumber(dimensions, "FPS");
-        root.addView(dimensions, matchWithBottom(10));
+        root.addView(fieldLabel("输出预设"), matchWrap());
+        outputPresetInput = new Spinner(this);
+        outputPresetInput.setAdapter(new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"自动（720p 安全值）", "720p / 30", "1080p / 30"}));
+        root.addView(outputPresetInput, matchWithBottom(10));
 
         TextView rotationLabel = fieldLabel("顺时针旋转");
         root.addView(rotationLabel, matchWrap());
@@ -227,18 +214,9 @@ public final class MainActivity extends Activity {
         mirrorInput.setText("水平镜像输出");
         root.addView(mirrorInput, matchWrap());
 
-        holdLastInput = new CheckBox(this);
-        holdLastInput.setText("断流后保持最后一帧");
-        root.addView(holdLastInput, matchWrap());
-
         bootInput = new CheckBox(this);
         bootInput.setText("开机自动恢复");
         root.addView(bootInput, matchWithBottom(8));
-
-        LinearLayout advanced = horizontalRow();
-        staleInput = addCompactNumber(advanced, "断流 ms");
-        qualityInput = addCompactNumber(advanced, "JPEG 质量");
-        root.addView(advanced, matchWithBottom(14));
 
         LinearLayout actions = horizontalRow();
         Button start = new Button(this);
@@ -255,10 +233,10 @@ public final class MainActivity extends Activity {
         root.addView(actions, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("明文 MJPEG 仅允许回环、局域网、链路本地或 CGNAT 地址。"
-                + "“外置相机”使用 AOSP external/0 Provider。前置/后置保留 OEM camera ID"
-                + "和 metadata，通过共享 FrameBus 向精确固件适配器供帧。适配器必须同时匹配"
-                + "厂商、SoC、HIDL/AIDL 实测结果和完整系统哈希；不匹配时拒绝启动并保留原相机。");
+        note.setText("明文 MJPEG 仅允许回环、局域网、链路本地或 CGNAT 地址。前置/后置"
+                + "替换保留 OEM camera ID 和 metadata，通过 FrameBus 向精确固件适配器供帧。"
+                + "只有 compatibility_id 与已签名 VERIFIED Profile 完全匹配才会启用；"
+                + "断流或适配器故障时自动失效替换并保留 OEM 相机。");
         note.setTextSize(13);
         note.setTextColor(Color.DKGRAY);
         note.setPadding(0, dp(16), 0, 0);
@@ -269,17 +247,11 @@ public final class MainActivity extends Activity {
     @SuppressLint("SetTextI18n")
     private void populate(VCamConfig config) {
         urlInput.setText(config.url);
-        deviceInput.setText(config.device);
-        widthInput.setText(Integer.toString(config.width));
-        heightInput.setText(Integer.toString(config.height));
-        fpsInput.setText(Integer.toString(config.fps));
-        staleInput.setText(Integer.toString(config.staleTimeoutMs));
-        qualityInput.setText(Integer.toString(config.jpegQuality));
         sourceInput.setSelection(config.url.equals("push://local") ? 1 : 0);
         targetInput.setSelection(targetPosition(config.target));
+        outputPresetInput.setSelection(presetPosition(config.outputPreset));
         rotationInput.setSelection(config.rotation / 90);
         mirrorInput.setChecked(config.mirror);
-        holdLastInput.setChecked(config.holdLast);
         bootInput.setChecked(config.startOnBoot);
     }
 
@@ -327,16 +299,10 @@ public final class MainActivity extends Activity {
                 sourceInput.getSelectedItemPosition() == 1
                         ? "push://local"
                         : urlInput.getText().toString().trim(),
-                deviceInput.getText().toString().trim(),
                 selectedTarget(),
-                parseInt(widthInput, "宽度"),
-                parseInt(heightInput, "高度"),
-                parseInt(fpsInput, "FPS"),
+                selectedPreset(),
                 rotationInput.getSelectedItemPosition() * 90,
                 mirrorInput.isChecked(),
-                holdLastInput.isChecked(),
-                parseInt(staleInput, "断流超时"),
-                parseInt(qualityInput, "JPEG 质量"),
                 bootInput.isChecked());
     }
 
@@ -352,7 +318,7 @@ public final class MainActivity extends Activity {
     private void authorizeAndDeploy() {
         deploymentView.setText("正在请求授权并检查部署…");
         ioExecutor.execute(() -> {
-            String result = deploymentBridge.authorizeAndDeploy(this);
+            String result = deploymentManager.authorizeAndDeploy(this);
             mainHandler.post(() -> deploymentView.setText(result));
         });
     }
@@ -374,26 +340,36 @@ public final class MainActivity extends Activity {
     private String selectedTarget() {
         switch (targetInput.getSelectedItemPosition()) {
             case 1:
-                return "front";
-            case 2:
                 return "back";
-            case 3:
+            case 2:
                 return "both";
             default:
-                return "external";
+                return "front";
         }
     }
 
     private static int targetPosition(String target) {
         if (target.equals("front")) {
-            return 1;
+            return 0;
         }
         if (target.equals("back")) {
-            return 2;
+            return 1;
         }
         if (target.equals("both")) {
-            return 3;
+            return 2;
         }
+        return 0;
+    }
+
+    private String selectedPreset() {
+        if (outputPresetInput.getSelectedItemPosition() == 2) return "1080p";
+        if (outputPresetInput.getSelectedItemPosition() == 1) return "720p";
+        return "auto";
+    }
+
+    private static int presetPosition(String preset) {
+        if ("1080p".equals(preset)) return 2;
+        if ("720p".equals(preset)) return 1;
         return 0;
     }
 
@@ -433,6 +409,7 @@ public final class MainActivity extends Activity {
         VCamConfig.saveLocalUri(this, localMediaUri);
         sourceInput.setSelection(1);
         updateLocalMediaLabel();
+        requestNotificationPermissionForLocalPlayback();
     }
 
     @SuppressLint("SetTextI18n")
@@ -442,11 +419,12 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private static int parseInt(EditText input, String label) {
-        try {
-            return Integer.parseInt(input.getText().toString().trim());
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(label + "不是有效整数", e);
+    private void requestNotificationPermissionForLocalPlayback() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    NOTIFICATION_PERMISSION_REQUEST);
         }
     }
 
@@ -477,10 +455,12 @@ public final class MainActivity extends Activity {
             report.put("generated_at_ms", System.currentTimeMillis());
             report.put("product_scope", "google-xiaomi-android11-13");
             report.put("profile_schema", 1);
-            report.put("profile_catalog_state", "EMPTY_NO_VERIFIED_PROFILES");
-            report.put("verification", "UNVERIFIED_NO_SIGNED_PROFILE_MATCH");
-            report.put("device_profile", new JSONObject(DeviceProfiler.collect(this)));
-            report.put("root_diagnostics", deploymentBridge.diagnostics(this));
+            String rootDiagnostics = deploymentManager.diagnostics(this);
+            JSONObject profileResolution = ProfileResolver.resolve(this, rootDiagnostics);
+            report.put("device_probe", DeviceProbe.collect(this));
+            report.put("profile_resolution", profileResolution);
+            report.put("self_test", SelfTest.run(rootDiagnostics, profileResolution));
+            report.put("root_diagnostics", rootDiagnostics);
             report.put("user_media_included", false);
             report.put("privacy_note", "不包含用户视频、帧内容、账号或网络凭据");
             return report.toString(2);
@@ -525,21 +505,6 @@ public final class MainActivity extends Activity {
         input.setInputType(inputType);
         input.setTextSize(15);
         parent.addView(input, matchWithBottom(10));
-        return input;
-    }
-
-    @SuppressLint("SetTextI18n")
-    private EditText addCompactNumber(LinearLayout parent, String hint) {
-        EditText input = new EditText(this);
-        input.setHint(hint);
-        input.setSingleLine(true);
-        input.setInputType(InputType.TYPE_CLASS_NUMBER);
-        input.setTextSize(14);
-        LinearLayout.LayoutParams params = weightedWrap(1);
-        if (parent.getChildCount() > 0) {
-            params.setMarginStart(dp(8));
-        }
-        parent.addView(input, params);
         return input;
     }
 

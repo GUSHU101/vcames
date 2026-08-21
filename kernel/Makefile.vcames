@@ -1,3 +1,0 @@
-# Add the following line to drivers/media/Makefile when integrating the
-# v4l2loopback sources into the target device kernel tree.
-obj-$(CONFIG_VIDEO_V4L2LOOPBACK) += v4l2loopback.o

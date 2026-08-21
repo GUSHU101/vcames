@@ -3,7 +3,6 @@
 #include "vcames/http_mjpeg_source.h"
 #include "vcames/image_transform.h"
 #include "vcames/replacement_adapter.h"
-#include "vcames/v4l2_sink.h"
 
 #include <algorithm>
 #include <chrono>
@@ -17,6 +16,8 @@ namespace vcames {
 namespace {
 
 constexpr size_t kMaxFrameBytes = 16 * 1024 * 1024;
+constexpr auto kPersistentOutage = std::chrono::milliseconds(800);
+constexpr int kInternalJpegQuality = 90;
 
 int64_t SteadyNowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -155,8 +156,7 @@ void Engine::SetReplacementAttached(bool attached) {
         if (attached) {
             status_.adapter_error.clear();
         }
-        start_monitor = attached && status_.running && config_.target != "external"
-                && !replacement_thread_.joinable();
+        start_monitor = attached && status_.running && !replacement_thread_.joinable();
     }
     if (start_monitor) {
         try {
@@ -253,9 +253,7 @@ void Engine::SourceLoop() {
 }
 
 void Engine::WriterLoop() {
-    V4l2Sink sink;
     SharedFrameBus::Frame bus_frame;
-    std::vector<uint8_t> external_frame;
     uint64_t consumed_generation = 0;
     const auto frame_interval = std::chrono::nanoseconds(1'000'000'000LL / config_.fps);
     auto next_write = std::chrono::steady_clock::now();
@@ -298,37 +296,24 @@ void Engine::WriterLoop() {
                 .height = config_.height,
                 .rotation = config_.rotation,
                 .mirror = config_.mirror,
-                .jpeg_quality = config_.jpeg_quality,
+                .jpeg_quality = kInternalJpegQuality,
             };
             std::string transform_error;
             bool transformed = false;
             int source_width = source_frame->width;
             int source_height = source_frame->height;
             bus_frame = SharedFrameBus::Frame{};
-            external_frame.clear();
             if (source_frame->format == SharedFrameBus::PixelFormat::kJpeg) {
-                if (config_.target == "external") {
-                    transformed = TransformJpeg(
-                            source_frame->payload,
-                            options,
-                            &bus_frame.payload,
-                            &source_width,
-                            &source_height,
-                            &transform_error);
-                    bus_frame.format = SharedFrameBus::PixelFormat::kJpeg;
-                    external_frame = bus_frame.payload;
-                } else {
-                    transformed = TransformJpegToNv21(
-                            source_frame->payload,
-                            options,
-                            &bus_frame.payload,
-                            &source_width,
-                            &source_height,
-                            &transform_error);
-                    bus_frame.format = SharedFrameBus::PixelFormat::kNv21;
-                    bus_frame.y_stride = static_cast<uint32_t>(config_.width);
-                    bus_frame.uv_stride = static_cast<uint32_t>(config_.width);
-                }
+                transformed = TransformJpegToNv21(
+                        source_frame->payload,
+                        options,
+                        &bus_frame.payload,
+                        &source_width,
+                        &source_height,
+                        &transform_error);
+                bus_frame.format = SharedFrameBus::PixelFormat::kNv21;
+                bus_frame.y_stride = static_cast<uint32_t>(config_.width);
+                bus_frame.uv_stride = static_cast<uint32_t>(config_.width);
             } else if (source_frame->format == SharedFrameBus::PixelFormat::kNv21) {
                 transformed = TransformNv21(
                         source_frame->payload,
@@ -340,15 +325,6 @@ void Engine::WriterLoop() {
                 bus_frame.format = SharedFrameBus::PixelFormat::kNv21;
                 bus_frame.y_stride = static_cast<uint32_t>(config_.width);
                 bus_frame.uv_stride = static_cast<uint32_t>(config_.width);
-                if (transformed && config_.target == "external") {
-                    transformed = Nv21ToJpeg(
-                            bus_frame.payload,
-                            config_.width,
-                            config_.height,
-                            config_.jpeg_quality,
-                            &external_frame,
-                            &transform_error);
-                }
             }
             if (transformed) {
                 bus_frame.width = static_cast<uint32_t>(config_.width);
@@ -367,16 +343,14 @@ void Engine::WriterLoop() {
                 status_.error = std::move(transform_error);
                 ++status_.frames_dropped;
                 bus_frame.payload.clear();
-                external_frame.clear();
             }
             consumed_generation = generation;
         }
 
         const auto now = std::chrono::steady_clock::now();
         const bool stale = last_frame_time.time_since_epoch().count() == 0
-                || now - last_frame_time > std::chrono::milliseconds(config_.stale_timeout_ms);
-        if (stale && !config_.hold_last) {
-            sink.Close();
+                || now - last_frame_time > kPersistentOutage;
+        if (stale) {
             frame_bus_.Invalidate();
             std::lock_guard lock(mutex_);
             status_.sink_open = false;
@@ -397,55 +371,17 @@ void Engine::WriterLoop() {
             next_write = now + frame_interval;
             continue;
         }
-        if (config_.target != "external") {
-            std::lock_guard lock(mutex_);
-            status_.frame_bus_ready = true;
-            status_.sink_open = true;
-            ++status_.frames_written;
-            next_write += frame_interval;
-            if (next_write < now - frame_interval) {
-                next_write = now + frame_interval;
-            }
-            continue;
-        }
-        if (external_frame.empty()) {
-            std::lock_guard lock(mutex_);
-            status_.sink_open = false;
-            status_.error = "external backend has no MJPEG frame";
-            next_write = now + frame_interval;
-            continue;
-        }
-        if (!sink.is_open()
-                && !sink.Open(
-                        config_.device,
-                        config_.width,
-                        config_.height,
-                        config_.fps,
-                        kMaxFrameBytes,
-                        &sink_error)) {
-            std::lock_guard lock(mutex_);
-            status_.sink_open = false;
-            status_.error = std::move(sink_error);
-            next_write = now + std::chrono::seconds(1);
-            continue;
-        }
-        if (sink.Write(external_frame, &sink_error)) {
+        {
             std::lock_guard lock(mutex_);
             status_.sink_open = true;
             status_.frame_bus_ready = true;
             ++status_.frames_written;
-        } else {
-            sink.Close();
-            std::lock_guard lock(mutex_);
-            status_.sink_open = false;
-            status_.error = std::move(sink_error);
         }
         next_write += frame_interval;
         if (next_write < now - frame_interval) {
             next_write = now + frame_interval;
         }
     }
-    sink.Close();
 }
 
 void Engine::ReplacementMonitorLoop() {

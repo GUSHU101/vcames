@@ -55,19 +55,8 @@ bool Config::Validate(std::string* error) const {
             || ContainsControlCharacter(url)) {
         return fail("source must be an http:// URL or push://local");
     }
-    if (!device.starts_with("/dev/video") || ContainsControlCharacter(device)) {
-        return fail("device must be a /dev/video* path");
-    }
-    const std::string_view device_number(device.data() + 10, device.size() - 10);
-    if (device_number.empty()
-            || !std::all_of(device_number.begin(), device_number.end(), [](unsigned char c) {
-                return std::isdigit(c) != 0;
-            })) {
-        return fail("device must end with a numeric V4L2 index");
-    }
-    if (target != "external" && target != "front" && target != "back"
-            && target != "both") {
-        return fail("target must be external, front, back, or both");
+    if (target != "front" && target != "back" && target != "both") {
+        return fail("target must be front, back, or both");
     }
     if (width < 160 || width > 3840 || height < 120 || height > 2160) {
         return fail("resolution is outside 160x120 through 3840x2160");
@@ -80,12 +69,6 @@ bool Config::Validate(std::string* error) const {
     }
     if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) {
         return fail("rotation must be 0, 90, 180, or 270");
-    }
-    if (stale_timeout_ms < 250 || stale_timeout_ms > 60000) {
-        return fail("stale timeout is outside 250 through 60000 milliseconds");
-    }
-    if (jpeg_quality < 40 || jpeg_quality > 100) {
-        return fail("JPEG quality is outside 40 through 100");
     }
     return true;
 }
@@ -172,7 +155,6 @@ bool ParseCommand(const std::string& request, Command* command, std::string* err
         }
     };
     string_option("url", &config.url);
-    string_option("device", &config.device);
     string_option("target", &config.target);
 
     auto int_option = [&values, error](const char* key, int* target) {
@@ -191,9 +173,7 @@ bool ParseCommand(const std::string& request, Command* command, std::string* err
     if (!int_option("width", &config.width) ||
         !int_option("height", &config.height) ||
         !int_option("fps", &config.fps) ||
-        !int_option("rotation", &config.rotation) ||
-        !int_option("stale_timeout_ms", &config.stale_timeout_ms) ||
-        !int_option("jpeg_quality", &config.jpeg_quality)) {
+        !int_option("rotation", &config.rotation)) {
         return false;
     }
 
@@ -210,16 +190,14 @@ bool ParseCommand(const std::string& request, Command* command, std::string* err
         }
         return false;
     };
-    if (!bool_option("mirror", &config.mirror) ||
-        !bool_option("hold_last", &config.hold_last)) {
+    if (!bool_option("mirror", &config.mirror)) {
         return false;
     }
 
     static const std::unordered_map<std::string, bool> kKnownOptions = {
-        {"url", true}, {"device", true}, {"target", true},
+        {"url", true}, {"target", true},
         {"width", true}, {"height", true},
         {"fps", true}, {"rotation", true}, {"mirror", true},
-        {"hold_last", true}, {"stale_timeout_ms", true}, {"jpeg_quality", true},
     };
     for (const auto& [key, unused] : values) {
         (void)unused;

@@ -23,53 +23,47 @@ jobs:
       - name: Check shell syntax
         run: |
           sh -n tools/root/build-root-module.sh root-module/template/*.sh
+          python3 -m py_compile tools/root/build_device_pack.py
           ! grep -q 'allow untrusted_app_all magisk:unix_stream_socket connectto' root-module/template/sepolicy.rule
           grep -q 'memory_access=read-only' daemon/src/shared_frame_bus.cpp
+          ! grep -R -q 'target == "external"\|/dev/video100\|v4l2loopback' app/src daemon/src daemon/include root-module/template
       - name: Validate Profile catalog and release gates
         run: |
           python3 -m json.tool profiles/schema/profile-v1.schema.json >/dev/null
           python3 -m json.tool profiles/schema/catalog-v1.schema.json >/dev/null
           python3 tools/compatibility-builder/validate_profiles.py profiles/catalog.json
           python3 -m unittest discover -s tools/compatibility-builder/tests -v
+          python3 -m unittest discover -s tools/root/tests -v
       - name: Install SDK
         run: sdkmanager 'platforms;android-35' 'build-tools;36.0.0' 'ndk;27.2.12479018'
       - name: Gradle build and lint
         run: >-
           ./gradlew --no-daemon
-          :app:assembleSystemDebug :app:assembleRootDebug
-          :app:lintSystemDebug :app:lintRootDebug
-      - name: Build API 30 and API 33 arm64 Root Bridge modules
+          :app:assembleDebug :app:lintDebug
+      - name: Build the single user APK and developer Root Bridge
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           ./tools/root/build-root-module.sh 30
-          ./tools/root/build-root-module.sh 33
-          unzip -t out/root/VCamES-Root-API30.zip
-          unzip -t out/root/VCamES-Root-API33.zip
-          unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx module.prop
-          unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx bridge.properties
+          unzip -t out/developer/VCamES-Root-API30.zip
+          unzip -Z1 out/developer/VCamES-Root-API30.zip | grep -Fx module.prop
+          unzip -Z1 out/developer/VCamES-Root-API30.zip | grep -Fx bridge.properties
+          unzip -Z1 out/developer/VCamES-Root-API30.zip | grep -Fx device-probe.sh
           . ./version.properties
-          test "$(unzip -p out/root/VCamES-Root-API30.zip module.prop | sed -n 's/^versionCode=//p' | tr -d '\r')" = "$versionCode"
-          test "$(unzip -p out/root/VCamES-Root-API30.zip bridge.properties | sed -n 's/^daemon_protocol=//p' | tr -d '\r')" = "$daemonProtocol"
-          test "$(unzip -p out/root/VCamES-Root-API30.zip bridge.properties | sed -n 's/^frame_bus_version=//p' | tr -d '\r')" = "$frameBusVersion"
-          unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx controller.apk
-          unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx bin/vcamesd
-          unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fx bin/vcames-socket-proxy
-          ! unzip -Z1 out/root/VCamES-Root-API30.zip | grep -Fq manifest_vcames_camera_provider.xml
-          unzip -Z1 out/root/VCamES-Root-API33.zip | grep -Fx bin/vcamesd
-          unzip -Z1 out/root/VCamES-Root-API33.zip | grep -Fx bin/vcames-socket-proxy
-          unzip -Z1 out/root/VCamES-Root-standalone.apk | grep -Fx assets/vcames-root-bridge.zip
+          test "$(unzip -p out/developer/VCamES-Root-API30.zip module.prop | sed -n 's/^versionCode=//p' | tr -d '\r')" = "$versionCode"
+          test "$(unzip -p out/developer/VCamES-Root-API30.zip bridge.properties | sed -n 's/^daemon_protocol=//p' | tr -d '\r')" = "$daemonProtocol"
+          unzip -Z1 out/developer/VCamES-Root-API30.zip | grep -Fx bin/vcamesd
+          unzip -Z1 out/developer/VCamES-Root-API30.zip | grep -Fx bin/vcames-socket-proxy
+          ! unzip -Z1 out/developer/VCamES-Root-API30.zip | grep -Eq 'controller.apk|video100|v4l2|external-camera-provider'
+          unzip -Z1 "out/release/VCamES-$versionName.apk" | grep -Fx assets/vcames-root-bridge.zip
       - uses: actions/upload-artifact@v7
         with:
           name: vcames-debug-apk
-          path: app/build/outputs/apk/*/debug/*.apk
+          path: out/release/*.apk
       - uses: actions/upload-artifact@v7
         with:
           name: vcames-root-bridge
           path: |
-            out/root/VCamES-Root-API30.zip
-            out/root/VCamES-Root-API33.zip
-            out/root/VCamES-Root-controller.apk
-            out/root/VCamES-Root-standalone.apk
+            out/developer/VCamES-Root-API30.zip
 
   native-tests:
     runs-on: ubuntu-latest

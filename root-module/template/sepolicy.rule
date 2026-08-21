@@ -13,7 +13,3 @@ allow vcames_proxy self:process { fork setrlimit }
 allow vcames_proxy magisk:unix_stream_socket connectto
 allow vcames_proxy magisk:process sigchld
 allow untrusted_app_all vcames_proxy:unix_stream_socket connectto
-
-# vcamesd and an optional matching external provider run in the root module domain.
-allow magisk video_device:chr_file { getattr open read write ioctl map lock }
-allow magisk hal_camera_hwservice:hwservice_manager { add find }

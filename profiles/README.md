@@ -4,6 +4,8 @@ This directory contains public, exact-build metadata only. It must never contain
 
 The catalog is intentionally empty: the repository has no Google or Xiaomi handset/OTA combination that has completed the release gates yet. A candidate must not be called `VERIFIED` until its device report exists, its compatibility ID and artifact hashes match, and the signed catalog validator accepts it.
 
+Profile v1 is the sole authored compatibility source for front/back replacement. The device-pack builder derives `profile.runtime.properties` inside the module; that file is a deterministic runtime projection and must never be edited or supplied separately.
+
 Run:
 
 ```bash

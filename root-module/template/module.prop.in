@@ -3,4 +3,4 @@ name=VCamES Root Bridge
 version=@VERSION_NAME@
 versionCode=@VERSION_CODE@
 author=GUSHU101 and contributors
-description=KernelSU/Magisk VCamES bridge for exact-build Google/Xiaomi Android 11-13
+description=Lean exact-build VCamES front/back bridge for rooted Google/Xiaomi Android 11-13

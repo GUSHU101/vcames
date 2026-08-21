@@ -1,8 +1,0 @@
-service vcamesd /system_ext/bin/vcamesd
-    # Run before the external camera-provider (class hal), so /dev/video100
-    # has a stable MJPEG format when the provider first enumerates it.
-    class core
-    user system
-    group camera inet
-    seclabel u:r:vcamesd:s0
-    restart_period 5

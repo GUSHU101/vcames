@@ -6,187 +6,70 @@ POSTFSDATA=false
 LATESTARTSERVICE=true
 
 module_version="$(sed -n 's/^version=//p' "$MODPATH/module.prop" | head -n 1)"
-[ -n "$module_version" ] || abort "! module.prop 缺少版本信息"
+[ -n "$module_version" ] || abort "! module.prop is missing version"
 ui_print "- VCamES Root Bridge $module_version"
 
 api="$(getprop ro.build.version.sdk)"
-case "$api" in
-  30|31|32|33) ;;
-  *) abort "! 仅支持 Android 11-13（API 30-33），当前 API=$api" ;;
+case "$api" in 30|31|32|33) ;; *) abort "! Android 11-13 only; current API=$api" ;; esac
+[ "$(getprop ro.product.cpu.abi)" = arm64-v8a ] || abort "! arm64-v8a only"
+
+identity="$(printf '%s|%s' "$(getprop ro.product.manufacturer)" \
+  "$(getprop ro.product.brand)" | tr '[:upper:]' '[:lower:]')"
+case "$identity" in
+  *google*|*xiaomi*|*redmi*|*poco*) ;;
+  *) abort "! This release supports Google and Xiaomi/Redmi/POCO only" ;;
 esac
 
-arch="$(getprop ro.product.cpu.abi)"
-case "$arch" in
-  arm64-v8a) ;;
-  *) abort "! Root Bridge 只提供 arm64-v8a，当前 ABI=$arch" ;;
-esac
-
-manufacturer="$(getprop ro.product.manufacturer)"
-brand="$(getprop ro.product.brand)"
-device="$(getprop ro.product.device)"
-vendor_identity="$(printf '%s|%s' "$manufacturer" "$brand" | tr '[:upper:]' '[:lower:]')"
-case "$vendor_identity" in
-  *google*) vendor_family="google" ;;
-  *xiaomi*|*redmi*|*poco*) vendor_family="xiaomi" ;;
-  *) abort "! 当前产品范围仅支持 Google、小米/Redmi/POCO，当前为 $manufacturer / $brand" ;;
-esac
-
-soc_identity="$(printf '%s|%s|%s|%s' \
-  "$(getprop ro.soc.manufacturer)" "$(getprop ro.soc.model)" \
-  "$(getprop ro.board.platform)" "$(getprop ro.hardware)" | \
-  tr '[:upper:]' '[:lower:]')"
-case "$soc_identity" in
-  *tensor*|*gs101*|*gs201*) soc_family="tensor" ;;
-  *qualcomm*|*snapdragon*|*qcom*|*msm*|*sm[0-9][0-9][0-9]*) soc_family="qualcomm" ;;
-  *exynos*) soc_family="exynos" ;;
-  *mediatek*|*mtk*|*mt[0-9][0-9][0-9][0-9]*) soc_family="mediatek" ;;
-  *) soc_family="unknown" ;;
-esac
-
-[ -f "$MODPATH/bin/vcamesd" ] || abort "! 安装包缺少 bin/vcamesd"
-[ -f "$MODPATH/bin/vcames-socket-proxy" ] || abort "! 安装包缺少 bin/vcames-socket-proxy"
-if [ -f "$MODPATH/bin/external-camera-provider" ]; then
-  provider_transport="$(sed -n 's/^transport=//p' "$MODPATH/external-provider.properties" 2>/dev/null | head -n 1)"
-  case "$provider_transport" in hidl-2.4|hidl-2.7|aidl-1) ;; *)
-    abort "! 打包 Provider 缺少有效 external-provider.properties" ;;
-  esac
-  [ -f "$MODPATH/system/vendor/etc/vintf/manifest/manifest_vcames_camera_provider.xml" ] || \
-    abort "! 打包 Provider 缺少匹配的 VINTF fragment"
-fi
-if [ ! -f "$MODPATH/controller.apk" ] && \
-    ! cmd package path io.github.gushu101.vcames >/dev/null 2>&1; then
-  abort "! standalone 模块需要先安装 VCamES Root APK"
+[ -f "$MODPATH/bin/vcamesd" ] || abort "! missing bin/vcamesd"
+[ -f "$MODPATH/bin/vcames-socket-proxy" ] || abort "! missing bin/vcames-socket-proxy"
+[ -f "$MODPATH/device-probe.sh" ] || abort "! missing device-probe.sh"
+if ! cmd package path io.github.gushu101.vcames >/dev/null 2>&1; then
+  abort "! Install the VCamES APK before installing its Root Bridge"
 fi
 
-compat_value() {
-  sed -n "s/^$1=//p" "$MODPATH/compatibility.properties" | head -n 1
-}
-
-aggregate_hash() {
-  hashes=""
-  for candidate in "$@"; do
-    if [ -f "$candidate" ]; then
-      hashes="$hashes$(sha256sum "$candidate")
-"
-    fi
-  done
-  [ -n "$hashes" ] || { printf 'MISSING'; return; }
-  printf '%s' "$hashes" | sort | sha256sum | cut -d' ' -f1
-}
-
-camera_hal_transport() {
-  aidl=false
-  hidl=false
-  if service list 2>/dev/null | grep -q 'android.hardware.camera.provider.ICameraProvider'; then
-    aidl=true
-  fi
-  if lshal 2>/dev/null | grep -q 'camera.provider@'; then
-    hidl=true
-  fi
-  if grep -R -E 'format="aidl"|<fqname>ICameraProvider/' \
-      /vendor/etc/vintf/manifest* /vendor/etc/vintf/manifest/*.xml \
-      /system/etc/vintf/manifest* 2>/dev/null | grep -q 'camera.provider'; then
-    aidl=true
-  fi
-  if grep -R -E 'format="hidl"|camera.provider@[0-9]' \
-      /vendor/etc/vintf/manifest* /vendor/etc/vintf/manifest/*.xml \
-      /system/etc/vintf/manifest* 2>/dev/null | grep -q 'camera.provider'; then
-    hidl=true
-  fi
-  if [ "$aidl" = true ] && [ "$hidl" = true ]; then
-    printf 'mixed'
-  elif [ "$aidl" = true ]; then
-    printf 'aidl'
-  elif [ "$hidl" = true ]; then
-    printf 'hidl'
-  else
-    printf 'unknown'
-  fi
+profile_value() {
+  sed -n "s/^$1=//p" "$MODPATH/profile.runtime.properties" | head -n 1
 }
 
 if [ -f "$MODPATH/bin/vcames-camera-adapter" ]; then
-  [ -f "$MODPATH/compatibility.properties" ] || \
-    abort "! 摄像头替换适配器缺少 compatibility.properties"
+  [ -s "$MODPATH/profile.json" ] || abort "! adapter requires profile.json"
+  [ -s "$MODPATH/profile.sig" ] || abort "! adapter requires profile.sig"
+  [ -s "$MODPATH/profile.runtime.properties" ] || \
+    abort "! adapter requires generated profile.runtime.properties"
+  expected_profile_hash="$(profile_value profile_sha256)"
+  [ "$(profile_value validation_status)" = VERIFIED ] || \
+    abort "! Profile is not VERIFIED"
+  actual_profile_hash="$(sha256sum "$MODPATH/profile.json" | cut -d' ' -f1)"
+  [ "$expected_profile_hash" = "$actual_profile_hash" ] || abort "! Profile hash mismatch"
+  actual_adapter_hash="$(sha256sum "$MODPATH/bin/vcames-camera-adapter" | cut -d' ' -f1)"
+  [ "$(profile_value adapter_sha256)" = "$actual_adapter_hash" ] || \
+    abort "! adapter hash mismatch"
 
-  actual_product="$(getprop ro.product.name)"
-  actual_hal_transport="$(camera_hal_transport)"
-  actual_system_fingerprint="$(printf '%s' "$(getprop ro.build.fingerprint)" | sha256sum | cut -d' ' -f1)"
-  actual_vendor_fingerprint="$(printf '%s' "$(getprop ro.vendor.build.fingerprint)" | sha256sum | cut -d' ' -f1)"
-  actual_cameraserver="$(sha256sum /system/bin/cameraserver 2>/dev/null | cut -d' ' -f1)"
-  actual_provider="$(aggregate_hash \
-    /vendor/bin/hw/*camera*provider* \
-    /vendor/lib64/hw/*camera*provider* \
-    /vendor/lib64/*camera*provider*)"
-  actual_vendor_camera="$(aggregate_hash \
-    /vendor/bin/hw/*camera* /vendor/lib64/hw/*camera* \
-    /vendor/lib64/*camera*.so /vendor/lib64/*camera*/*)"
-  actual_graphics="$(aggregate_hash \
-    /vendor/lib64/hw/*mapper* /vendor/lib64/hw/*allocator* \
-    /vendor/lib64/*mapper* /vendor/lib64/*allocator*)"
-  actual_adapter="$(sha256sum "$MODPATH/bin/vcames-camera-adapter" | cut -d' ' -f1)"
-  actual_compatibility_id="$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
-    "$vendor_family" "$soc_family" "$actual_hal_transport" \
-    "$manufacturer" "$actual_product" "$device" "$api" \
-    "$actual_system_fingerprint" "$actual_vendor_fingerprint" \
-    "$actual_cameraserver" "$actual_provider" "$actual_vendor_camera" \
-    "$actual_graphics" | \
-    sha256sum | cut -d' ' -f1)"
-
-  [ "$soc_family" != "unknown" ] || abort "! 无法识别 SoC family，拒绝加载 replacement adapter"
-  [ "$actual_hal_transport" != "unknown" ] || abort "! 无法识别 Camera HIDL/AIDL transport"
-  [ "$(compat_value vendor_family)" = "$vendor_family" ] || abort "! 适配器厂商族不匹配"
-  [ "$(compat_value soc_family)" = "$soc_family" ] || abort "! 适配器 SoC family 不匹配"
-  [ "$(compat_value camera_hal_transport)" = "$actual_hal_transport" ] || \
-    abort "! 适配器 Camera HAL transport 不匹配"
-  [ "$(compat_value manufacturer)" = "$manufacturer" ] || abort "! 适配器制造商不匹配"
-  [ "$(compat_value product)" = "$actual_product" ] || abort "! 适配器 product 不匹配"
-  [ "$(compat_value device)" = "$device" ] || abort "! 适配器设备不匹配"
-  [ "$(compat_value api)" = "$api" ] || abort "! 适配器 API 不匹配"
-  [ "$(compat_value system_fingerprint_sha256)" = "$actual_system_fingerprint" ] || \
-    abort "! 适配器 system fingerprint 不匹配"
-  [ "$(compat_value vendor_fingerprint_sha256)" = "$actual_vendor_fingerprint" ] || \
-    abort "! 适配器 vendor fingerprint 不匹配"
-  [ "$(compat_value cameraserver_sha256)" = "$actual_cameraserver" ] || \
-    abort "! 适配器 cameraserver 不匹配"
-  [ "$(compat_value camera_provider_sha256)" = "$actual_provider" ] || \
-    abort "! 适配器 camera provider 集合不匹配"
-  [ "$(compat_value vendor_camera_libraries_sha256)" = "$actual_vendor_camera" ] || \
-    abort "! 适配器 vendor camera 库集合不匹配"
-  [ "$(compat_value graphics_stack_sha256)" = "$actual_graphics" ] || \
-    abort "! 适配器 mapper/allocator 集合不匹配"
-  [ "$(compat_value adapter_sha256)" = "$actual_adapter" ] || \
-    abort "! 适配器二进制自身哈希不匹配"
-  [ "$(compat_value compatibility_id)" = "$actual_compatibility_id" ] || \
-    abort "! compatibility_id 不匹配"
-  ui_print "- $vendor_family/$soc_family/$actual_hal_transport 前后摄适配器完整构建校验通过"
+  actual_probe="$MODPATH/.device-probe.actual"
+  sh "$MODPATH/device-probe.sh" >"$actual_probe" || abort "! DeviceProbe failed"
+  for key in vendor_family soc_family camera_hal_transport manufacturer product device api \
+    system_fingerprint_sha256 vendor_fingerprint_sha256 cameraserver_sha256 \
+    camera_provider_sha256 vendor_camera_libraries_sha256 graphics_stack_sha256 \
+    compatibility_id; do
+    expected="$(profile_value "$key")"
+    actual="$(sed -n "s/^$key=//p" "$actual_probe" | head -n 1)"
+    [ -n "$expected" ] || abort "! Profile projection missing $key"
+    [ "$expected" = "$actual" ] || abort "! Exact Profile mismatch: $key"
+  done
+  rm -f "$actual_probe"
+  ui_print "- exact compatibility_id and adapter hash matched"
+else
+  ui_print "! No signed device pack included; module will fail closed"
 fi
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/bin/vcamesd" 0 0 0755
 set_perm "$MODPATH/bin/vcames-socket-proxy" 0 0 0755
-[ ! -f "$MODPATH/bin/external-camera-provider" ] || \
-  set_perm "$MODPATH/bin/external-camera-provider" 0 0 0755
+set_perm "$MODPATH/device-probe.sh" 0 0 0755
 [ ! -f "$MODPATH/bin/vcames-camera-adapter" ] || \
   set_perm "$MODPATH/bin/vcames-camera-adapter" 0 0 0755
-[ ! -f "$MODPATH/kernel/v4l2loopback.ko" ] || \
-  set_perm "$MODPATH/kernel/v4l2loopback.ko" 0 0 0644
 set_perm "$MODPATH/service.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
 
-existing="$(cmd package list packages -U io.github.gushu101.vcames 2>/dev/null)"
-case "$existing" in
-  *uid:1000*)
-    abort "! 检测到平台 UID 版本。Root 与系统版本不能共存。"
-    ;;
-esac
-
-if [ -f "$MODPATH/controller.apk" ]; then
-  ui_print "- 安装普通签名 Root 控制端"
-  if ! pm install -r -g "$MODPATH/controller.apk" >/dev/null 2>&1; then
-    ui_print "! 控制 APK 自动安装失败；请手动安装配套 controller APK"
-  fi
-fi
-
-ui_print "- 兼容 KernelSU/Magisk 模块脚本；KernelSU system 覆盖需要 metamodule"
-ui_print "- 保持 SELinux enforcing；不安装 Xposed/Zygisk 注入代码"
-ui_print "- 重启后执行模块 Action 查看能力与安全模式状态"
+ui_print "- ordinary APK + explicit uid-0 grant; no system UID, Xposed or Zygisk"
+ui_print "- SELinux remains enforcing; replacement fails closed to OEM camera"
