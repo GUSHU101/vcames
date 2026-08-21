@@ -62,6 +62,15 @@ public:
     // received fd and consume the public wire layout below directly.
     bool CopyLatest(Frame* frame, uint64_t* sequence, std::string* error) const;
 
+    // Canonical consumer-side validation for an fd received over SCM_RIGHTS.
+    // The fd must be read-only and refer to a sealed, structurally valid v2 bus.
+    static bool ValidateConsumerFd(int fd, std::string* error);
+    static bool CopyLatestFromFd(
+            int fd,
+            Frame* frame,
+            uint64_t* sequence,
+            std::string* error);
+
     struct SlotHeader {
         uint64_t write_epoch;
         uint64_t sequence;
@@ -100,6 +109,30 @@ private:
     size_t mapping_size_ = 0;
     size_t slot_capacity_ = 0;
     uint64_t next_sequence_ = 1;
+};
+
+// Persistent read-only mapping intended for an exact-build Camera HAL adapter.
+// Attach performs all fd/header/seal checks once; CopyLatest validates every
+// published slot and retries if the producer changes it during a read.
+class SharedFrameBusReader {
+public:
+    SharedFrameBusReader() = default;
+    ~SharedFrameBusReader();
+    SharedFrameBusReader(const SharedFrameBusReader&) = delete;
+    SharedFrameBusReader& operator=(const SharedFrameBusReader&) = delete;
+
+    bool Attach(int read_only_fd, std::string* error);
+    void Close();
+    bool CopyLatest(
+            SharedFrameBus::Frame* frame,
+            uint64_t* sequence,
+            std::string* error) const;
+    bool is_attached() const { return mapping_ != nullptr; }
+
+private:
+    int fd_ = -1;
+    void* mapping_ = nullptr;
+    size_t mapping_size_ = 0;
 };
 
 }  // namespace vcames

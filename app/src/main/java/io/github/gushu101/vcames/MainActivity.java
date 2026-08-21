@@ -128,7 +128,7 @@ public final class MainActivity extends Activity {
         scroll.addView(root, matchWrap());
 
         TextView title = new TextView(this);
-        title.setText("VCamES 2.1 · System Camera");
+        title.setText("VCamES 2.2 · System Camera");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(13, 27, 42));
         title.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -166,14 +166,14 @@ public final class MainActivity extends Activity {
         diagnostics.setOnClickListener(view -> exportDiagnostics());
         root.addView(diagnostics, matchWithBottom(14));
 
-        urlInput = addTextField(root, "HTTP MJPEG 地址", InputType.TYPE_CLASS_TEXT
+        urlInput = addTextField(root, "私网 HTTP MJPEG 地址", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_URI);
         root.addView(fieldLabel("视频来源"), matchWrap());
         sourceInput = new Spinner(this);
         sourceInput.setAdapter(new ArrayAdapter<>(
                 this,
                 android.R.layout.simple_spinner_dropdown_item,
-                new String[]{"HTTP MJPEG", "本地视频（循环）"}));
+                new String[]{"私网 HTTP MJPEG", "本地视频（循环）"}));
         root.addView(sourceInput, matchWithBottom(6));
 
         root.addView(fieldLabel("替换目标"), matchWrap());
@@ -248,7 +248,8 @@ public final class MainActivity extends Activity {
         root.addView(actions, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("“外置相机”使用 AOSP external/0 Provider。前置/后置保留 OEM camera ID"
+        note.setText("明文 MJPEG 仅允许回环、局域网、链路本地或 CGNAT 地址。"
+                + "“外置相机”使用 AOSP external/0 Provider。前置/后置保留 OEM camera ID"
                 + "和 metadata，通过共享 FrameBus 向精确固件适配器供帧。适配器必须同时匹配"
                 + "厂商、SoC、HIDL/AIDL 实测结果和完整系统哈希；不匹配时拒绝启动并保留原相机。");
         note.setTextSize(13);
@@ -352,7 +353,7 @@ public final class MainActivity extends Activity {
     private void exportDiagnostics() {
         deploymentView.setText(R.string.diagnostics_collecting);
         ioExecutor.execute(() -> {
-            pendingDiagnostics = "VCamES 2.1 compatibility report\n"
+            pendingDiagnostics = "VCamES 2.2 compatibility report\n"
                     + "generated_at_ms=" + System.currentTimeMillis() + "\n\n"
                     + DeviceProfiler.collect(this) + "\n\n"
                     + deploymentBridge.diagnostics(this) + "\n";

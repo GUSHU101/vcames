@@ -11,8 +11,18 @@ android {
         applicationId = "io.github.gushu101.vcames"
         minSdk = 30
         targetSdk = 35
-        versionCode = 20100
-        versionName = "2.1.0"
+        versionCode = 20200
+        versionName = "2.2.0"
+
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++20", "-Wall", "-Wextra", "-Werror")
+            }
+        }
     }
 
     flavorDimensions += "deployment"
@@ -45,11 +55,22 @@ android {
         project.layout.buildDirectory.dir("generated/rootBridgeAssets")
     )
 
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     lint {
         abortOnError = true
         warningsAsErrors = true
         // Compile/target SDK can be newer than the deliberately narrow
         // runtime support matrix (Android 11-13 / API 30-33).
-        disable += setOf("ExpiredTargetSdkVersion", "OldTargetApi")
+        disable += setOf(
+            "ChromeOsAbiSupport",
+            "ExpiredTargetSdkVersion",
+            "OldTargetApi"
+        )
     }
 }

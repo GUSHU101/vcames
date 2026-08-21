@@ -2,6 +2,7 @@
 
 #include "vcames/http_mjpeg_source.h"
 #include "vcames/image_transform.h"
+#include "vcames/replacement_adapter.h"
 #include "vcames/v4l2_sink.h"
 
 #include <algorithm>
@@ -9,6 +10,8 @@
 #include <sstream>
 #include <system_error>
 #include <utility>
+
+#include <unistd.h>
 
 namespace vcames {
 namespace {
@@ -68,6 +71,9 @@ void Engine::Stop() {
     }
     if (writer_thread_.joinable()) {
         writer_thread_.join();
+    }
+    if (replacement_thread_.joinable()) {
+        replacement_thread_.join();
     }
     std::lock_guard lock(mutex_);
     status_.running = false;
@@ -142,8 +148,27 @@ bool Engine::PushNv21Frame(
 }
 
 void Engine::SetReplacementAttached(bool attached) {
-    std::lock_guard lock(mutex_);
-    status_.replacement_attached = attached;
+    bool start_monitor = false;
+    {
+        std::lock_guard lock(mutex_);
+        status_.replacement_attached = attached;
+        if (attached) {
+            status_.adapter_error.clear();
+        }
+        start_monitor = attached && status_.running && config_.target != "external"
+                && !replacement_thread_.joinable();
+    }
+    if (start_monitor) {
+        try {
+            replacement_thread_ = std::thread(
+                    &Engine::ReplacementMonitorLoop, this);
+        } catch (const std::system_error& exception) {
+            std::lock_guard lock(mutex_);
+            status_.replacement_attached = false;
+            status_.adapter_error = std::string("unable to start adapter monitor: ")
+                    + exception.what();
+        }
+    }
 }
 
 std::string Engine::StatusJson() const {
@@ -161,15 +186,19 @@ std::string Engine::StatusJson() const {
          << ",\"frame_bus_ready\":" << (status_.frame_bus_ready ? "true" : "false")
          << ",\"replacement_attached\":"
          << (status_.replacement_attached ? "true" : "false")
+         << ",\"replacement_verification\":\"unverified-until-device-content-test\""
          << ",\"transport\":\"memfd-ring-v2\""
          << ",\"frame_format\":\"" << JsonEscape(status_.frame_format) << "\""
          << ",\"target\":\"" << JsonEscape(config_.target) << "\""
          << ",\"received\":" << status_.frames_received
          << ",\"written\":" << status_.frames_written
          << ",\"dropped\":" << status_.frames_dropped
+         << ",\"adapter_health_failures\":" << status_.adapter_health_failures
+         << ",\"adapter_reconnects\":" << status_.adapter_reconnects
          << ",\"source_size\":\"" << status_.source_width << "x" << status_.source_height << "\""
          << ",\"age_ms\":" << age_ms
-         << ",\"error\":\"" << JsonEscape(status_.error) << "\"}";
+         << ",\"error\":\"" << JsonEscape(status_.error) << "\""
+         << ",\"adapter_error\":\"" << JsonEscape(status_.adapter_error) << "\"}";
     return json.str();
 }
 
@@ -417,6 +446,52 @@ void Engine::WriterLoop() {
         }
     }
     sink.Close();
+}
+
+void Engine::ReplacementMonitorLoop() {
+    int backoff_seconds = 1;
+    while (!WaitForStop(std::chrono::seconds(2))) {
+        std::string health_error;
+        if (CheckReplacementAdapterHealth(&health_error)) {
+            std::lock_guard lock(mutex_);
+            status_.replacement_attached = true;
+            status_.adapter_error.clear();
+            backoff_seconds = 1;
+            continue;
+        }
+        {
+            std::lock_guard lock(mutex_);
+            status_.replacement_attached = false;
+            ++status_.adapter_health_failures;
+            status_.adapter_error = std::move(health_error);
+        }
+
+        std::string reconnect_error;
+        const int frame_bus_fd = frame_bus_.DuplicateFd(&reconnect_error);
+        bool reconnected = false;
+        if (frame_bus_fd >= 0) {
+            DeactivateReplacementAdapter();
+            reconnected = ActivateReplacementAdapter(
+                    config_, frame_bus_fd, frame_bus_.Descriptor(), &reconnect_error);
+            close(frame_bus_fd);
+        }
+        if (reconnected) {
+            std::lock_guard lock(mutex_);
+            status_.replacement_attached = true;
+            ++status_.adapter_reconnects;
+            status_.adapter_error.clear();
+            backoff_seconds = 1;
+            continue;
+        }
+        {
+            std::lock_guard lock(mutex_);
+            status_.adapter_error = std::move(reconnect_error);
+        }
+        if (WaitForStop(std::chrono::seconds(backoff_seconds))) {
+            break;
+        }
+        backoff_seconds = std::min(backoff_seconds * 2, 30);
+    }
 }
 
 void Engine::PublishFrame(SourceFrame&& frame) {

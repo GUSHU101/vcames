@@ -34,12 +34,26 @@ fi
   echo "进程稳定记录（不代表相机内容已验证）："
   sed 's/^/  /' "$STATE_DIR/process-stable.properties"
 }
+echo
+echo "VCamES socket proxy:"
+if [ -x "${0%/*}/bin/vcames-socket-proxy" ]; then
+  proxy_context="$(ls -Z "${0%/*}/bin/vcames-socket-proxy" 2>/dev/null)"
+  case "$proxy_context" in
+    *:vcames_proxy_exec:*) echo "  SELinux 标签正常：$proxy_context" ;;
+    *) echo "  SELinux 标签异常：$proxy_context" ;;
+  esac
+else
+  echo "  未安装"
+fi
 
 echo "video100:"
 ls -lZ /dev/video100 2>/dev/null || echo "  不存在"
 cat /sys/class/video4linux/video100/name 2>/dev/null || true
 echo
 echo "External Camera Provider:"
+[ ! -f "${0%/*}/external-provider.properties" ] || {
+  echo "  模块声明：$(cat "${0%/*}/external-provider.properties")"
+}
 provider="$(lshal 2>/dev/null | grep 'camera.provider.*external/0')"
 [ -n "$provider" ] || provider="$(service list 2>/dev/null | grep 'camera.provider.*external/0')"
 [ -z "$provider" ] && echo "  external/0 未注册" || echo "$provider"

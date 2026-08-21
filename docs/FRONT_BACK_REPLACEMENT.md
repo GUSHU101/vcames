@@ -36,6 +36,7 @@ bus_version=2
 header_size=4096
 slot_count=4
 slot_capacity=16777216
+memory_access=read-only
 formats=jpeg,nv21,nv12,i420,rgba8888
 preferred_format=nv21
 .
@@ -48,6 +49,7 @@ OK
 adapter_protocol=2
 frame_transport=attached
 bus_version=2
+memory_access=read-only
 .
 ```
 
@@ -56,10 +58,16 @@ bus_version=2
 `health=ready`、`frame_transport=attached`、`pipeline=active`；任何阶段失败都会发送
 `DEACTIVATE` 并停止 replacement。
 
-它必须验证 `VCFBUS2\0`、版本、映射长度、所有槽边界、format/stride/尺寸和偶数稳定
+收到的 memfd 必须是 `O_RDONLY` 且具备 grow/shrink/seal 密封；若 adapter 可以写入 FD，
+必须拒绝附着。仓库的 `SharedFrameBusReader` 提供规范化持久只读映射，验证
+`VCFBUS2\0`、版本、精确映射长度、所有槽边界、format/stride/尺寸和偶数稳定
 `write_epoch`，按 `published_sequence` 只取最新帧。`published_sequence=0`、adapter 错误或
 daemon 死亡时按 `failure_policy` 回退 OEM 原相机。secure/protected、RAW、depth 和未知 stream
 不得写入虚拟内容。只返回 `OK` 而未确认协议/FD 的旧 adapter 会被拒绝。
+
+激活后 daemon 每 2 秒发送一次 `HEALTH`。adapter 进程退出时 Root service 以指数退避重启；
+daemon 发现新的服务后会重新执行 ATTACH_BUS/ACTIVATE 并传递新的只读 FD。重连计数只说明
+协议恢复，仍需 Camera2 内容测试证明真实前后摄像头输出已被替换。
 
 停止请求为：
 

@@ -33,8 +33,8 @@
 
 namespace {
 
-constexpr char kControlSocketName[] = "vcamesd";
-constexpr char kFrameSocketName[] = "vcamesd_frames";
+std::string g_control_socket_name = "vcamesd";
+std::string g_frame_socket_name = "vcamesd_frames";
 constexpr size_t kMaxCommandBytes = 16 * 1024;
 constexpr uint32_t kMaxFrameBytes = 16 * 1024 * 1024;
 std::atomic<bool> g_stop{false};
@@ -117,9 +117,28 @@ bool ParseArguments(int argc, char** argv, std::string* error) {
             g_drop_to_system = true;
             continue;
         }
+        if ((argument == "--control-socket" || argument == "--frame-socket")
+                && index + 1 < argc) {
+            const std::string_view socket_name(argv[++index]);
+            if (socket_name.empty()
+                    || socket_name.size()
+                            >= sizeof(((sockaddr_un*)nullptr)->sun_path) - 1
+                    || socket_name.find_first_not_of(
+                            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
+                            != std::string_view::npos) {
+                if (error != nullptr) {
+                    *error = "local socket names must use safe ASCII characters";
+                }
+                return false;
+            }
+            (argument == "--control-socket" ? g_control_socket_name
+                                             : g_frame_socket_name) = socket_name;
+            continue;
+        }
         if (argument != "--allowed-uid" || index + 1 >= argc) {
             if (error != nullptr) {
-                *error = "usage: vcamesd [--allowed-uid APP_UID] [--drop-to-system]";
+                *error = "usage: vcamesd [--allowed-uid APP_UID] [--drop-to-system] "
+                        "[--control-socket NAME] [--frame-socket NAME]";
             }
             return false;
         }
@@ -235,6 +254,9 @@ void HandleControlClient(int fd, vcames::Engine* engine) {
     }
     switch (command.type) {
         case vcames::CommandType::kStart:
+            // Stop the previous health monitor before deactivating its
+            // adapter, otherwise a concurrent reconnect can race a reconfigure.
+            engine->Stop();
             vcames::DeactivateReplacementAdapter();
             if (!engine->Start(command.config, &error)) {
                 WriteAll(fd, "{\"ok\":false,\"error\":\""
@@ -410,12 +432,12 @@ int main(int argc, char** argv) {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
 
-    const int control_listener = CreateAbstractListener(kControlSocketName, &error);
+    const int control_listener = CreateAbstractListener(g_control_socket_name.c_str(), &error);
     if (control_listener < 0) {
         Log(error);
         return 1;
     }
-    const int frame_listener = CreateAbstractListener(kFrameSocketName, &error);
+    const int frame_listener = CreateAbstractListener(g_frame_socket_name.c_str(), &error);
     if (frame_listener < 0) {
         Log(error);
         close(control_listener);

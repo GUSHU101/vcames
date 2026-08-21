@@ -7,10 +7,22 @@ git clone --recurse-submodules https://github.com/GUSHU101/vcames \
   vendor/gushu101/vcames
 ```
 
-将 `aosp/product/vcames.mk` 加入产品继承，将 `aosp/BoardConfigVcames.mk` 加入目标设备
-`BoardConfig.mk`。当前通用 external 示例使用分支匹配的 HIDL 2.4 service；若目标 API 33
-产品树使用 AIDL external provider，应同时替换 package、VINTF fragment、init 和 SELinux，
-不能混用实例声明。
+将 `aosp/BoardConfigVcames.mk` 加入目标设备 `BoardConfig.mk`，并只继承下面一个产品片段；
+三个片段都会继承公共 `vcames.mk`，不能重复继承：
+
+```make
+# Android 11/12 HIDL 2.4
+$(call inherit-product, vendor/gushu101/vcames/aosp/product/vcames_provider_hidl_2_4.mk)
+
+# 或目标树明确提供 HIDL 2.7 external service
+$(call inherit-product, vendor/gushu101/vcames/aosp/product/vcames_provider_hidl_2_7.mk)
+
+# 或 Android 13 AIDL v1
+$(call inherit-product, vendor/gushu101/vcames/aosp/product/vcames_provider_aidl_1.mk)
+```
+
+选择必须来自目标 VINTF、已存在的 provider package 和 service 注册结果，而不是只根据
+Android 版本推断。片段分别复制互斥的 HIDL 2.4、HIDL 2.7 或 AIDL v1 manifest。
 
 ## 内核和启动
 
@@ -30,7 +42,7 @@ adb shell 'ls -lZ /dev/video100'
 ```bash
 source build/envsetup.sh
 lunch <target_product>-userdebug
-m VCamES vcamesd android.hardware.camera.provider@2.4-external-service
+m VCamES libvcames_yuv vcamesd <所选 external-provider package>
 m bootimage vendorimage systemextimage vendor_dlkmimage
 ```
 

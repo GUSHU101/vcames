@@ -5,9 +5,13 @@
 `vcamesd` 建立端点后会降权到 Android system UID，并仅保留 camera/inet 补充组；降权失败
 会直接退出。
 
+控制 APK 只连接专用 `vcames_proxy` SELinux 域；代理先校验 `SO_PEERCRED`，再转发到
+ROOT 私有端点。模块不会向普通应用开放 Magisk 域的其他 Unix socket。
+
 - external：要求匹配当前内核的 v4l2loopback 和可注册的 External Camera Provider；
 - front/back/both：要求当前 OTA 专用 adapter 与 `compatibility.properties`；
-- adapter 通过 FrameBus v2 接收 NV21/JPEG 最新帧，必须确认 protocol v2 与 FD attached；
+- adapter 通过 FrameBus v2 的只读、定长密封 memfd 接收 NV21/JPEG 最新帧，必须确认
+  protocol v2、FD attached 与 `memory_access=read-only`；
 - 无精确 adapter 时前后替换不可用；ROOT 授权不会自动产生 Camera HAL 兼容性。
 
 重启后在 Root 管理器执行模块 Action 查看状态。任何 `UNVERIFIED` 状态都必须完成真机

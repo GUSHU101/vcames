@@ -4,9 +4,12 @@ param(
     [int]$Api = 33,
     [string]$NdkPath = '',
     [string]$DaemonBinary = '',
+    [string]$SocketProxyBinary = '',
     [string]$ControllerApk = '',
     [string]$KernelModule = '',
     [string]$ProviderBinary = '',
+    [ValidateSet('', 'hidl-2.4', 'hidl-2.7', 'aidl-1')]
+    [string]$ExternalProviderTransport = '',
     [string]$ReplacementAdapter = '',
     [string]$CompatibilityManifest = '',
     [string]$OutputPath = ''
@@ -80,13 +83,25 @@ if ([string]::IsNullOrWhiteSpace($DaemonBinary)) {
     & $cmakeExe --build $buildDir
     if ($LASTEXITCODE -ne 0) { throw 'vcamesd Android 构建失败。' }
     $DaemonBinary = Join-Path $buildDir 'vcamesd'
+    $SocketProxyBinary = Join-Path $buildDir 'vcames-socket-proxy'
+}
+
+if ([string]::IsNullOrWhiteSpace($SocketProxyBinary) -and -not [string]::IsNullOrWhiteSpace($DaemonBinary)) {
+    $SocketProxyBinary = Join-Path (Split-Path -Parent $DaemonBinary) 'vcames-socket-proxy'
 }
 
 $DaemonBinary = Resolve-ExistingFile $DaemonBinary 'vcamesd'
+$SocketProxyBinary = Resolve-ExistingFile $SocketProxyBinary 'vcames socket proxy'
 $KernelModule = Resolve-ExistingFile $KernelModule 'v4l2loopback module'
 $ProviderBinary = Resolve-ExistingFile $ProviderBinary 'External Camera Provider'
 $ReplacementAdapter = Resolve-ExistingFile $ReplacementAdapter 'Camera replacement adapter'
 $CompatibilityManifest = Resolve-ExistingFile $CompatibilityManifest 'Compatibility manifest'
+if ($ProviderBinary -and [string]::IsNullOrWhiteSpace($ExternalProviderTransport)) {
+    throw '打包 External Camera Provider 时必须指定 -ExternalProviderTransport。'
+}
+if (-not $ProviderBinary -and -not [string]::IsNullOrWhiteSpace($ExternalProviderTransport)) {
+    throw '-ExternalProviderTransport 只能与 -ProviderBinary 一起使用。'
+}
 if ($ReplacementAdapter -and -not $CompatibilityManifest) {
     throw '打包前后摄像头替换适配器时必须提供 -CompatibilityManifest。'
 }
@@ -143,14 +158,13 @@ try {
         -Destination $stage -Recurse -Force
     New-Item -ItemType Directory -Force -Path (Join-Path $stage 'bin') | Out-Null
     Copy-Item -LiteralPath $DaemonBinary -Destination (Join-Path $stage 'bin\vcamesd')
+    Copy-Item -LiteralPath $SocketProxyBinary `
+        -Destination (Join-Path $stage 'bin\vcames-socket-proxy')
 
     $vendorEtc = Join-Path $stage 'system\vendor\etc'
     New-Item -ItemType Directory -Force -Path (Join-Path $vendorEtc 'vintf\manifest') | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot 'aosp\config\external_camera_config.xml') `
         -Destination (Join-Path $vendorEtc 'external_camera_config.xml')
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'aosp\vintf\manifest_vcames_camera_provider.xml') `
-        -Destination (Join-Path $vendorEtc 'vintf\manifest\manifest_vcames_camera_provider.xml')
-
     if ($KernelModule) {
         New-Item -ItemType Directory -Force -Path (Join-Path $stage 'kernel') | Out-Null
         Copy-Item -LiteralPath $KernelModule -Destination (Join-Path $stage 'kernel\v4l2loopback.ko')
@@ -158,6 +172,15 @@ try {
     if ($ProviderBinary) {
         Copy-Item -LiteralPath $ProviderBinary `
             -Destination (Join-Path $stage 'bin\external-camera-provider')
+        $fragmentNames = @{
+            'hidl-2.4' = 'manifest_vcames_camera_provider_hidl_2_4.xml'
+            'hidl-2.7' = 'manifest_vcames_camera_provider_hidl_2_7.xml'
+            'aidl-1' = 'manifest_vcames_camera_provider_aidl_1.xml'
+        }
+        Copy-Item -LiteralPath (Join-Path $repoRoot "aosp\vintf\$($fragmentNames[$ExternalProviderTransport])") `
+            -Destination (Join-Path $vendorEtc 'vintf\manifest\manifest_vcames_camera_provider.xml')
+        Set-Content -LiteralPath (Join-Path $stage 'external-provider.properties') `
+            -Value "transport=$ExternalProviderTransport" -Encoding Ascii
     }
     if ($ReplacementAdapter) {
         Copy-Item -LiteralPath $ReplacementAdapter `

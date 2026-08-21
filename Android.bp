@@ -18,12 +18,27 @@ android_app {
     certificate: "platform",
     privileged: true,
     system_ext_specific: true,
-    min_sdk_version: "33",
+    min_sdk_version: "30",
     target_sdk_version: "current",
     java_version: "11",
+    jni_libs: ["libvcames_yuv"],
     optimize: {
         enabled: true,
         shrink: true,
         proguard_flags_files: ["app/proguard-rules.pro"],
     },
+}
+
+cc_library_shared {
+    name: "libvcames_yuv",
+    srcs: [
+        "app/src/main/cpp/yuv420_jni.cpp",
+        "native/yuv420_converter.cpp",
+    ],
+    local_include_dirs: ["native"],
+    header_libs: ["jni_headers"],
+    system_ext_specific: true,
+    min_sdk_version: "30",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    cpp_std: "c++20",
 }

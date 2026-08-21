@@ -1,6 +1,8 @@
 #include "vcames/shared_frame_bus.h"
 
 #include <cstdint>
+#include <cerrno>
+#include <fcntl.h>
 #include <iostream>
 #include <string>
 #include <unistd.h>
@@ -63,6 +65,23 @@ int main() {
     int duplicate = bus.DuplicateFd(&error);
     if (duplicate < 0) {
         std::cerr << error << '\n';
+        return 1;
+    }
+    if ((fcntl(duplicate, F_GETFL) & O_ACCMODE) != O_RDONLY
+            || write(duplicate, "x", 1) >= 0 || errno != EBADF) {
+        std::cerr << "FrameBus consumer fd is writable\n";
+        close(duplicate);
+        return 1;
+    }
+    vcames::SharedFrameBus::Frame from_fd;
+    uint64_t from_fd_sequence = 0;
+    vcames::SharedFrameBusReader reader;
+    if (!vcames::SharedFrameBus::ValidateConsumerFd(duplicate, &error)
+            || !reader.Attach(duplicate, &error)
+            || !reader.CopyLatest(&from_fd, &from_fd_sequence, &error)
+            || from_fd.payload != actual.payload || from_fd_sequence != sequence) {
+        std::cerr << "read-only FrameBus consumer validation failed: " << error << '\n';
+        close(duplicate);
         return 1;
     }
     close(duplicate);

@@ -28,17 +28,28 @@ trap cleanup EXIT
 cp -R "$ROOT_DIR/root-module/template/." "$STAGE/"
 mkdir -p "$STAGE/bin" "$STAGE/system/vendor/etc/vintf/manifest"
 cp "$BUILD_DIR/vcamesd" "$STAGE/bin/vcamesd"
+cp "$BUILD_DIR/vcames-socket-proxy" "$STAGE/bin/vcames-socket-proxy"
 cp "$ROOT_DIR/aosp/config/external_camera_config.xml" \
   "$STAGE/system/vendor/etc/external_camera_config.xml"
-cp "$ROOT_DIR/aosp/vintf/manifest_vcames_camera_provider.xml" \
-  "$STAGE/system/vendor/etc/vintf/manifest/manifest_vcames_camera_provider.xml"
-
 if [[ -n "${VCAMES_KERNEL_MODULE:-}" ]]; then
   mkdir -p "$STAGE/kernel"
   cp "$VCAMES_KERNEL_MODULE" "$STAGE/kernel/v4l2loopback.ko"
 fi
 if [[ -n "${VCAMES_PROVIDER_BINARY:-}" ]]; then
+  case "${VCAMES_EXTERNAL_PROVIDER_TRANSPORT:-}" in
+    hidl-2.4) fragment="manifest_vcames_camera_provider_hidl_2_4.xml" ;;
+    hidl-2.7) fragment="manifest_vcames_camera_provider_hidl_2_7.xml" ;;
+    aidl-1) fragment="manifest_vcames_camera_provider_aidl_1.xml" ;;
+    *) echo "Set VCAMES_EXTERNAL_PROVIDER_TRANSPORT to hidl-2.4, hidl-2.7, or aidl-1" >&2; exit 64 ;;
+  esac
   cp "$VCAMES_PROVIDER_BINARY" "$STAGE/bin/external-camera-provider"
+  cp "$ROOT_DIR/aosp/vintf/$fragment" \
+    "$STAGE/system/vendor/etc/vintf/manifest/manifest_vcames_camera_provider.xml"
+  printf 'transport=%s\n' "$VCAMES_EXTERNAL_PROVIDER_TRANSPORT" \
+    >"$STAGE/external-provider.properties"
+elif [[ -n "${VCAMES_EXTERNAL_PROVIDER_TRANSPORT:-}" ]]; then
+  echo "VCAMES_EXTERNAL_PROVIDER_TRANSPORT requires VCAMES_PROVIDER_BINARY" >&2
+  exit 64
 fi
 if [[ -n "${VCAMES_REPLACEMENT_ADAPTER:-}" ]]; then
   [[ -n "${VCAMES_COMPATIBILITY_MANIFEST:-}" ]] || {

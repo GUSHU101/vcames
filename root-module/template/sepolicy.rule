@@ -1,6 +1,18 @@
-# Permit ordinary application domains to connect to the root-hosted
-# abstract Unix socket. vcamesd still checks SO_PEERCRED against one numeric UID.
-allow untrusted_app_all magisk:unix_stream_socket connectto
+# Keep ordinary apps away from every Magisk-domain Unix socket. A tiny proxy
+# receives a dedicated domain, validates SO_PEERCRED against the installed
+# controller UID, and relays only the two VCamES endpoints.
+type vcames_proxy domain
+type vcames_proxy_exec { file_type exec_type }
+type_transition magisk vcames_proxy_exec process vcames_proxy
+allow magisk vcames_proxy_exec:file { getattr open read execute map }
+allow magisk vcames_proxy:process { transition signal sigkill sigstop }
+allow vcames_proxy vcames_proxy_exec:file { getattr open read execute map entrypoint }
+allow vcames_proxy self:unix_stream_socket { create bind listen accept connect read write getattr getopt setopt shutdown }
+allow vcames_proxy self:capability { setuid setgid }
+allow vcames_proxy self:process { fork setrlimit }
+allow vcames_proxy magisk:unix_stream_socket connectto
+allow vcames_proxy magisk:process sigchld
+allow untrusted_app_all vcames_proxy:unix_stream_socket connectto
 
 # vcamesd and an optional matching external provider run in the root module domain.
 allow magisk video_device:chr_file { getattr open read write ioctl map lock }

@@ -42,22 +42,12 @@ bool Contains(const std::string& value, const char* field) {
 }
 
 bool ValidateFrameBus(int frame_fd, const std::string& request) {
-    struct stat info{};
-    if (frame_fd < 0 || fstat(frame_fd, &info) != 0
-            || info.st_size < static_cast<off_t>(sizeof(vcames::SharedFrameBus::BusHeader))) {
-        return false;
-    }
-    void* mapping = mmap(nullptr, sizeof(vcames::SharedFrameBus::BusHeader),
-                         PROT_READ, MAP_SHARED, frame_fd, 0);
-    if (mapping == MAP_FAILED) {
-        return false;
-    }
-    const auto* header = static_cast<const vcames::SharedFrameBus::BusHeader*>(mapping);
-    const bool valid = std::memcmp(header->magic, "VCFBUS2\0", 8) == 0
-            && header->version == 2 && header->slot_count == 4
+    std::string error;
+    vcames::SharedFrameBusReader reader;
+    const bool valid = reader.Attach(frame_fd, &error)
             && Contains(request, "transport=memfd-ring-v2")
+            && Contains(request, "memory_access=read-only")
             && Contains(request, "preferred_format=nv21");
-    munmap(mapping, sizeof(vcames::SharedFrameBus::BusHeader));
     return valid;
 }
 
@@ -106,7 +96,7 @@ bool HandlePhase(int listener, int phase) {
             valid = valid && request.starts_with("ATTACH_BUS\n")
                     && ValidateFrameBus(frame_fd, request);
             response = "OK\nadapter_protocol=2\nframe_transport=attached\n"
-                    "bus_version=2\n";
+                    "bus_version=2\nmemory_access=read-only\n";
             break;
         case 3:
             valid = valid && request.starts_with("ACTIVATE\n") && frame_fd < 0
@@ -117,6 +107,7 @@ bool HandlePhase(int listener, int phase) {
             response = "OK\nadapter_protocol=2\npipeline=active\nmetadata=preserved\n";
             break;
         case 4:
+        case 5:
             valid = valid && request.starts_with("HEALTH\n") && frame_fd < 0;
             response = "OK\nadapter_protocol=2\nhealth=ready\n"
                     "frame_transport=attached\npipeline=active\n";
@@ -137,7 +128,7 @@ bool HandlePhase(int listener, int phase) {
 
 void Serve(int listener, bool* valid) {
     *valid = true;
-    for (int phase = 0; phase < 5; ++phase) {
+    for (int phase = 0; phase < 6; ++phase) {
         if (!HandlePhase(listener, phase)) {
             *valid = false;
             return;
@@ -169,12 +160,13 @@ int main() {
     int frame_fd = bus.DuplicateFd(&error);
     const bool activated = frame_fd >= 0 && vcames::ActivateReplacementAdapter(
             config, frame_fd, bus.Descriptor(), &error);
+    const bool healthy = activated && vcames::CheckReplacementAdapterHealth(&error);
     if (frame_fd >= 0) {
         close(frame_fd);
     }
     server.join();
     close(listener);
-    if (!activated || !valid) {
+    if (!activated || !healthy || !valid) {
         std::cerr << "adapter activation failed: " << error << '\n';
         return 1;
     }

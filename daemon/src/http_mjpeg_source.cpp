@@ -1,6 +1,7 @@
 #include "vcames/http_mjpeg_source.h"
 
 #include "vcames/mjpeg_parser.h"
+#include "vcames/network_policy.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -185,6 +186,26 @@ bool Connect(const HttpUrl& url, FileDescriptor* connected, std::string* error) 
 
     std::string last_error = "no usable address";
     for (addrinfo* address = addresses; address != nullptr; address = address->ai_next) {
+        bool private_address = false;
+        if (address->ai_family == AF_INET
+                && address->ai_addrlen >= sizeof(sockaddr_in)) {
+            const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(address->ai_addr);
+            private_address = IsPrivateNetworkAddress(
+                    IpAddressFamily::kIpv4,
+                    reinterpret_cast<const uint8_t*>(&ipv4->sin_addr),
+                    sizeof(ipv4->sin_addr));
+        } else if (address->ai_family == AF_INET6
+                && address->ai_addrlen >= sizeof(sockaddr_in6)) {
+            const auto* ipv6 = reinterpret_cast<const sockaddr_in6*>(address->ai_addr);
+            private_address = IsPrivateNetworkAddress(
+                    IpAddressFamily::kIpv6,
+                    reinterpret_cast<const uint8_t*>(&ipv6->sin6_addr),
+                    sizeof(ipv6->sin6_addr));
+        }
+        if (!private_address) {
+            last_error = "cleartext MJPEG is restricted to private or local addresses";
+            continue;
+        }
         FileDescriptor candidate(socket(
                 address->ai_family,
                 address->ai_socktype | SOCK_CLOEXEC,

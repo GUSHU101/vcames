@@ -15,6 +15,7 @@ bool ActivateReplacementAdapter(
         int frame_bus_fd,
         const std::string& frame_bus_descriptor,
         std::string* error);
+bool CheckReplacementAdapterHealth(std::string* error);
 void DeactivateReplacementAdapter();
 
 }  // namespace vcames

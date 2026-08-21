@@ -1,6 +1,6 @@
 id=vcames_root_bridge
 name=VCamES Root Bridge
-version=2.1.0
-versionCode=20100
+version=2.2.0
+versionCode=20200
 author=GUSHU101 and contributors
 description=KernelSU/Magisk VCamES bridge for exact-build Google/Xiaomi/Samsung Android 11-13

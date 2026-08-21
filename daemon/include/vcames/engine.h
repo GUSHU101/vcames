@@ -55,15 +55,19 @@ private:
         uint64_t frames_received = 0;
         uint64_t frames_written = 0;
         uint64_t frames_dropped = 0;
+        uint64_t adapter_health_failures = 0;
+        uint64_t adapter_reconnects = 0;
         int source_width = 0;
         int source_height = 0;
         std::string frame_format = "none";
         std::string error;
+        std::string adapter_error;
         std::chrono::steady_clock::time_point last_frame_time{};
     };
 
     void SourceLoop();
     void WriterLoop();
+    void ReplacementMonitorLoop();
     void PublishFrame(SourceFrame&& frame);
     bool WaitForStop(std::chrono::milliseconds duration);
 
@@ -76,6 +80,7 @@ private:
     std::atomic<bool> stop_requested_{false};
     std::thread source_thread_;
     std::thread writer_thread_;
+    std::thread replacement_thread_;
     SharedFrameBus frame_bus_;
 };
 

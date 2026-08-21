@@ -3,6 +3,7 @@ package io.github.gushu101.vcames;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
 
+import java.io.BufferedOutputStream;
 import java.io.Closeable;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -20,7 +21,8 @@ final class FramePushClient implements Closeable {
         socket.connect(new LocalSocketAddress(
                 SOCKET_NAME,
                 LocalSocketAddress.Namespace.ABSTRACT));
-        output = new DataOutputStream(socket.getOutputStream());
+        output = new DataOutputStream(
+                new BufferedOutputStream(socket.getOutputStream(), 64 * 1024));
         output.write("VCF2".getBytes(StandardCharsets.US_ASCII));
         output.flush();
     }

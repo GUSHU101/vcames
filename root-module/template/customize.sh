@@ -5,7 +5,7 @@ PROPFILE=false
 POSTFSDATA=false
 LATESTARTSERVICE=true
 
-ui_print "- VCamES Root Bridge 2.1.0"
+ui_print "- VCamES Root Bridge 2.2.0"
 
 api="$(getprop ro.build.version.sdk)"
 case "$api" in
@@ -43,6 +43,15 @@ case "$soc_identity" in
 esac
 
 [ -f "$MODPATH/bin/vcamesd" ] || abort "! 安装包缺少 bin/vcamesd"
+[ -f "$MODPATH/bin/vcames-socket-proxy" ] || abort "! 安装包缺少 bin/vcames-socket-proxy"
+if [ -f "$MODPATH/bin/external-camera-provider" ]; then
+  provider_transport="$(sed -n 's/^transport=//p' "$MODPATH/external-provider.properties" 2>/dev/null | head -n 1)"
+  case "$provider_transport" in hidl-2.4|hidl-2.7|aidl-1) ;; *)
+    abort "! 打包 Provider 缺少有效 external-provider.properties" ;;
+  esac
+  [ -f "$MODPATH/system/vendor/etc/vintf/manifest/manifest_vcames_camera_provider.xml" ] || \
+    abort "! 打包 Provider 缺少匹配的 VINTF fragment"
+fi
 if [ ! -f "$MODPATH/controller.apk" ] && \
     ! cmd package path io.github.gushu101.vcames >/dev/null 2>&1; then
   abort "! standalone 模块需要先安装 VCamES Root APK"
@@ -153,6 +162,7 @@ fi
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/bin/vcamesd" 0 0 0755
+set_perm "$MODPATH/bin/vcames-socket-proxy" 0 0 0755
 [ ! -f "$MODPATH/bin/external-camera-provider" ] || \
   set_perm "$MODPATH/bin/external-camera-provider" 0 0 0755
 [ ! -f "$MODPATH/bin/vcames-camera-adapter" ] || \

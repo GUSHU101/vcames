@@ -13,6 +13,7 @@ if(ANDROID)
         src/image_transform.cpp
         src/main.cpp
         src/mjpeg_parser.cpp
+        src/network_policy.cpp
         src/replacement_adapter.cpp
         src/shared_frame_bus.cpp
         src/v4l2_sink.cpp
@@ -21,6 +22,9 @@ if(ANDROID)
     target_compile_options(vcamesd PRIVATE -Wall -Wextra -Werror)
     find_library(ANDROID_LOG_LIBRARY log REQUIRED)
     target_link_libraries(vcamesd PRIVATE ${ANDROID_LOG_LIBRARY})
+
+    add_executable(vcames-socket-proxy src/socket_proxy.cpp)
+    target_compile_options(vcames-socket-proxy PRIVATE -Wall -Wextra -Werror)
 else()
     add_library(vcames_parser STATIC
         src/config.cpp
@@ -32,6 +36,22 @@ else()
     else()
         target_compile_options(vcames_parser PRIVATE -Wall -Wextra -Werror)
     endif()
+
+    add_library(vcames_network_policy STATIC src/network_policy.cpp)
+    target_include_directories(vcames_network_policy PUBLIC include)
+    if(MSVC)
+        target_compile_options(vcames_network_policy PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(vcames_network_policy PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_executable(vcames_network_policy_tests tests/network_policy_test.cpp)
+    target_link_libraries(vcames_network_policy_tests PRIVATE vcames_network_policy)
+    if(MSVC)
+        target_compile_options(vcames_network_policy_tests PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(vcames_network_policy_tests PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME vcames_network_policy_tests COMMAND vcames_network_policy_tests)
 
     add_library(vcames_image_transform STATIC src/image_transform.cpp)
     target_include_directories(vcames_image_transform PRIVATE include third_party/stb)
@@ -46,6 +66,22 @@ else()
         target_compile_options(vcames_image_transform_tests PRIVATE -Wall -Wextra -Werror)
     endif()
     add_test(NAME vcames_image_transform_tests COMMAND vcames_image_transform_tests)
+
+    add_library(vcames_yuv420 STATIC ../native/yuv420_converter.cpp)
+    target_include_directories(vcames_yuv420 PUBLIC ../native)
+    if(MSVC)
+        target_compile_options(vcames_yuv420 PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(vcames_yuv420 PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_executable(vcames_yuv420_tests tests/yuv420_converter_test.cpp)
+    target_link_libraries(vcames_yuv420_tests PRIVATE vcames_yuv420)
+    if(MSVC)
+        target_compile_options(vcames_yuv420_tests PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(vcames_yuv420_tests PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME vcames_yuv420_tests COMMAND vcames_yuv420_tests)
 
     if(UNIX AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         find_package(Threads REQUIRED)

@@ -8,7 +8,6 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.ImageFormat;
-import android.graphics.Rect;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaCodec;
@@ -205,6 +204,7 @@ public final class LocalMediaService extends Service {
                 reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 3);
                 final long minimumFrameIntervalNs = 1_000_000_000L / maximumFps;
                 final long[] lastSentNs = {0};
+                final Yuv420Converter converter = new Yuv420Converter();
                 reader.setOnImageAvailableListener(imageReader -> {
                     try (Image image = imageReader.acquireLatestImage()) {
                         if (image == null || stop.get() || frameError.get() != null) {
@@ -214,11 +214,11 @@ public final class LocalMediaService extends Service {
                         if (lastSentNs[0] != 0 && now - lastSentNs[0] < minimumFrameIntervalNs) {
                             return;
                         }
-                        Nv21Frame frame = imageToNv21(image);
+                        byte[] frame = converter.convert(image);
                         sender.sendNv21(
-                                frame.payload,
-                                frame.width,
-                                frame.height,
+                                frame,
+                                converter.width(),
+                                converter.height(),
                                 now);
                         lastSentNs[0] = now;
                     } catch (IOException | RuntimeException e) {
@@ -353,77 +353,6 @@ public final class LocalMediaService extends Service {
         }
     }
 
-    private static Nv21Frame imageToNv21(Image image) throws IOException {
-        if (image.getFormat() != ImageFormat.YUV_420_888 || image.getPlanes().length < 3) {
-            throw new IOException("Decoder did not produce YUV_420_888 images");
-        }
-        Rect crop = image.getCropRect();
-        int cropLeft = crop.left & ~1;
-        int cropTop = crop.top & ~1;
-        int width = (crop.right - cropLeft) & ~1;
-        int height = (crop.bottom - cropTop) & ~1;
-        if (width <= 0 || height <= 0) {
-            throw new IOException("Decoder produced an empty image");
-        }
-        byte[] nv21 = new byte[width * height * 3 / 2];
-        Image.Plane[] planes = image.getPlanes();
-        copyPlane(
-                planes[0],
-                cropLeft,
-                cropTop,
-                width,
-                height,
-                nv21,
-                0,
-                1);
-
-        int chromaOffset = width * height;
-        int chromaWidth = width / 2;
-        int chromaHeight = height / 2;
-        for (int row = 0; row < chromaHeight; ++row) {
-            for (int column = 0; column < chromaWidth; ++column) {
-                int output = chromaOffset + (row * chromaWidth + column) * 2;
-                nv21[output] = planeByte(
-                        planes[2],
-                        cropLeft / 2 + column,
-                        cropTop / 2 + row);
-                nv21[output + 1] = planeByte(
-                        planes[1],
-                        cropLeft / 2 + column,
-                        cropTop / 2 + row);
-            }
-        }
-        return new Nv21Frame(nv21, width, height);
-    }
-
-    private static void copyPlane(
-            Image.Plane plane,
-            int startX,
-            int startY,
-            int width,
-            int height,
-            byte[] output,
-            int outputOffset,
-            int outputPixelStride) throws IOException {
-        for (int row = 0; row < height; ++row) {
-            for (int column = 0; column < width; ++column) {
-                int index = outputOffset + (row * width + column) * outputPixelStride;
-                output[index] = planeByte(plane, startX + column, startY + row);
-            }
-        }
-    }
-
-    private static byte planeByte(Image.Plane plane, int x, int y) throws IOException {
-        ByteBuffer buffer = plane.getBuffer();
-        int index = buffer.position()
-                + y * plane.getRowStride()
-                + x * plane.getPixelStride();
-        if (index < 0 || index >= buffer.limit()) {
-            throw new IOException("YUV plane stride points outside the image buffer");
-        }
-        return buffer.get(index);
-    }
-
     private static boolean sleepInterruptibly(long millis, AtomicBoolean stop) {
         long deadline = SystemClock.elapsedRealtime() + millis;
         while (!stop.get()) {
@@ -436,15 +365,4 @@ public final class LocalMediaService extends Service {
         return false;
     }
 
-    private static final class Nv21Frame {
-        final byte[] payload;
-        final int width;
-        final int height;
-
-        Nv21Frame(byte[] payload, int width, int height) {
-            this.payload = payload;
-            this.width = width;
-            this.height = height;
-        }
-    }
 }

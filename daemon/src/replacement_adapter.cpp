@@ -211,7 +211,8 @@ bool ActivateReplacementAdapter(
     if (!RequestAndRequire(
                 attach.str(),
                 frame_bus_fd,
-                {"adapter_protocol=2", "frame_transport=attached", "bus_version=2"},
+                {"adapter_protocol=2", "frame_transport=attached", "bus_version=2",
+                 "memory_access=read-only"},
                 "ATTACH_BUS",
                 error)) {
         DeactivateReplacementAdapter();
@@ -246,6 +247,16 @@ bool ActivateReplacementAdapter(
         return false;
     }
     return true;
+}
+
+bool CheckReplacementAdapterHealth(std::string* error) {
+    return RequestAndRequire(
+            "HEALTH\nadapter_protocol=2\n.\n",
+            -1,
+            {"adapter_protocol=2", "health=ready",
+             "frame_transport=attached", "pipeline=active"},
+            "HEALTH",
+            error);
 }
 
 void DeactivateReplacementAdapter() {

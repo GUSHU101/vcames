@@ -11,6 +11,7 @@
 
 #include <limits>
 #include <sstream>
+#include <utility>
 
 #if defined(__linux__)
 #include <linux/memfd.h>
@@ -134,6 +135,110 @@ bool ValidateFrame(const SharedFrameBus::Frame& frame, size_t capacity, std::str
         }
     }
     return true;
+}
+
+bool ValidateHeader(
+        const SharedFrameBus::BusHeader* header,
+        size_t mapping_size,
+        std::string* error) {
+    if (header == nullptr || mapping_size < sizeof(*header)
+            || std::memcmp(header->magic, kMagic, sizeof(kMagic)) != 0
+            || header->version != SharedFrameBus::kVersion
+            || header->slot_count != SharedFrameBus::kSlotCount
+            || header->header_size != AlignUp(sizeof(*header), kHeaderAlignment)
+            || header->header_size > mapping_size
+            || header->slot_capacity == 0
+            || header->slot_capacity > SharedFrameBus::kDefaultSlotCapacity) {
+        if (error != nullptr) {
+            *error = "FrameBus v2 header is invalid";
+        }
+        return false;
+    }
+    const size_t header_size = header->header_size;
+    const size_t slot_capacity = header->slot_capacity;
+    if (slot_capacity > (std::numeric_limits<size_t>::max() - header_size)
+                    / SharedFrameBus::kSlotCount
+            || header_size + slot_capacity * SharedFrameBus::kSlotCount
+                    != mapping_size) {
+        if (error != nullptr) {
+            *error = "FrameBus v2 mapping size does not match its header";
+        }
+        return false;
+    }
+    return true;
+}
+
+const uint8_t* SlotData(
+        const void* mapping,
+        const SharedFrameBus::BusHeader* header,
+        uint32_t slot) {
+    return static_cast<const uint8_t*>(mapping)
+            + header->header_size
+            + static_cast<size_t>(slot) * header->slot_capacity;
+}
+
+bool CopyLatestFromMapping(
+        const void* mapping,
+        size_t mapping_size,
+        SharedFrameBus::Frame* frame,
+        uint64_t* sequence,
+        std::string* error) {
+    if (mapping == nullptr || frame == nullptr) {
+        if (error != nullptr) {
+            *error = "shared frame bus reader is invalid";
+        }
+        return false;
+    }
+    const auto* header = static_cast<const SharedFrameBus::BusHeader*>(mapping);
+    if (!ValidateHeader(header, mapping_size, error)) {
+        return false;
+    }
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const uint64_t published = LoadAcquire(&header->published_sequence);
+        if (published == 0) {
+            if (error != nullptr) {
+                *error = "shared frame bus has no frame";
+            }
+            return false;
+        }
+        const uint32_t slot_index = static_cast<uint32_t>(
+                published % SharedFrameBus::kSlotCount);
+        const SharedFrameBus::SlotHeader* slot = &header->slots[slot_index];
+        const uint64_t before = LoadAcquire(&slot->write_epoch);
+        if ((before & 1U) != 0 || slot->sequence != published
+                || slot->payload_size == 0
+                || slot->payload_size > header->slot_capacity) {
+            continue;
+        }
+        SharedFrameBus::Frame candidate;
+        const uint8_t* payload = SlotData(mapping, header, slot_index);
+        candidate.payload.assign(payload, payload + slot->payload_size);
+        candidate.width = slot->width;
+        candidate.height = slot->height;
+        candidate.format = static_cast<SharedFrameBus::PixelFormat>(slot->format);
+        candidate.y_stride = slot->y_stride;
+        candidate.uv_stride = slot->uv_stride;
+        candidate.rotation = slot->rotation;
+        candidate.flags = slot->flags;
+        candidate.presentation_time_ns = slot->presentation_time_ns;
+        candidate.arrival_time_ns = slot->arrival_time_ns;
+        const uint64_t after = LoadAcquire(&slot->write_epoch);
+        if (before != after || (after & 1U) != 0) {
+            continue;
+        }
+        if (!ValidateFrame(candidate, header->slot_capacity, error)) {
+            return false;
+        }
+        *frame = std::move(candidate);
+        if (sequence != nullptr) {
+            *sequence = published;
+        }
+        return true;
+    }
+    if (error != nullptr) {
+        *error = "shared frame changed during read";
+    }
+    return false;
 }
 
 }  // namespace
@@ -289,9 +394,11 @@ int SharedFrameBus::DuplicateFd(std::string* error) const {
         }
         return -1;
     }
-    const int duplicate = fcntl(fd_, F_DUPFD_CLOEXEC, 0);
+    const std::string descriptor_path = "/proc/self/fd/" + std::to_string(fd_);
+    const int duplicate = open(descriptor_path.c_str(), O_RDONLY | O_CLOEXEC);
     if (duplicate < 0 && error != nullptr) {
-        *error = std::string("frame bus fd duplication failed: ") + std::strerror(errno);
+        *error = std::string("read-only frame bus fd open failed: ")
+                + std::strerror(errno);
     }
     return duplicate;
 }
@@ -307,6 +414,7 @@ std::string SharedFrameBus::Descriptor() const {
           << "header_size=" << header->header_size << '\n'
           << "slot_count=" << header->slot_count << '\n'
           << "slot_capacity=" << header->slot_capacity << '\n'
+          << "memory_access=read-only\n"
           << "formats=jpeg,nv21,nv12,i420,rgba8888\n"
           << "preferred_format=nv21\n";
     return value.str();
@@ -316,56 +424,146 @@ bool SharedFrameBus::CopyLatest(
         Frame* frame,
         uint64_t* sequence,
         std::string* error) const {
-    if (!is_open() || frame == nullptr) {
+    if (!is_open()) {
         if (error != nullptr) {
-            *error = "shared frame bus reader is invalid";
+            *error = "shared frame bus is not open";
         }
         return false;
     }
-    const auto* header = static_cast<const BusHeader*>(mapping_);
-    for (int attempt = 0; attempt < 4; ++attempt) {
-        const uint64_t published = LoadAcquire(&header->published_sequence);
-        if (published == 0) {
-            if (error != nullptr) {
-                *error = "shared frame bus has no frame";
-            }
-            return false;
+    return CopyLatestFromMapping(mapping_, mapping_size_, frame, sequence, error);
+}
+
+bool SharedFrameBus::ValidateConsumerFd(int fd, std::string* error) {
+    if (fd < 0) {
+        if (error != nullptr) {
+            *error = "FrameBus consumer fd is invalid";
         }
-        const uint32_t slot_index = static_cast<uint32_t>(published % kSlotCount);
-        const SlotHeader* slot = &header->slots[slot_index];
-        const uint64_t before = LoadAcquire(&slot->write_epoch);
-        if ((before & 1U) != 0 || slot->sequence != published
-                || slot->payload_size == 0 || slot->payload_size > slot_capacity_) {
-            continue;
-        }
-        frame->payload.assign(
-                SlotData(slot_index), SlotData(slot_index) + slot->payload_size);
-        frame->width = slot->width;
-        frame->height = slot->height;
-        frame->format = static_cast<PixelFormat>(slot->format);
-        frame->y_stride = slot->y_stride;
-        frame->uv_stride = slot->uv_stride;
-        frame->rotation = slot->rotation;
-        frame->flags = slot->flags;
-        frame->presentation_time_ns = slot->presentation_time_ns;
-        frame->arrival_time_ns = slot->arrival_time_ns;
-        const uint64_t after = LoadAcquire(&slot->write_epoch);
-        if (before == after && (after & 1U) == 0) {
-            if (sequence != nullptr) {
-                *sequence = published;
-            }
-            return true;
-        }
+        return false;
     }
-    if (error != nullptr) {
-        *error = "shared frame changed during read";
+    const int access_flags = fcntl(fd, F_GETFL);
+    if (access_flags < 0 || (access_flags & O_ACCMODE) != O_RDONLY) {
+        if (error != nullptr) {
+            *error = "FrameBus consumer fd must be read-only";
+        }
+        return false;
     }
-    return false;
+#ifdef F_GET_SEALS
+    const int seals = fcntl(fd, F_GET_SEALS);
+    constexpr int kRequiredSeals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+    if (seals < 0 || (seals & kRequiredSeals) != kRequiredSeals) {
+        if (error != nullptr) {
+            *error = "FrameBus consumer fd is not size-sealed";
+        }
+        return false;
+    }
+#endif
+    struct stat info{};
+    if (fstat(fd, &info) != 0 || info.st_size < static_cast<off_t>(sizeof(BusHeader))
+            || static_cast<uintmax_t>(info.st_size)
+                    > std::numeric_limits<size_t>::max()) {
+        if (error != nullptr) {
+            *error = "FrameBus consumer fd size is invalid";
+        }
+        return false;
+    }
+    const size_t mapping_size = static_cast<size_t>(info.st_size);
+    void* mapping = mmap(nullptr, mapping_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (mapping == MAP_FAILED) {
+        if (error != nullptr) {
+            *error = std::string("FrameBus consumer mmap failed: ")
+                    + std::strerror(errno);
+        }
+        return false;
+    }
+    const bool valid = ValidateHeader(static_cast<const BusHeader*>(mapping),
+                                      mapping_size, error);
+    munmap(mapping, mapping_size);
+    return valid;
+}
+
+bool SharedFrameBus::CopyLatestFromFd(
+        int fd,
+        Frame* frame,
+        uint64_t* sequence,
+        std::string* error) {
+    SharedFrameBusReader reader;
+    return reader.Attach(fd, error) && reader.CopyLatest(frame, sequence, error);
 }
 
 uint8_t* SharedFrameBus::SlotData(uint32_t slot) const {
     const auto* header = static_cast<const BusHeader*>(mapping_);
     return static_cast<uint8_t*>(mapping_) + header->header_size + slot * slot_capacity_;
+}
+
+SharedFrameBusReader::~SharedFrameBusReader() {
+    Close();
+}
+
+bool SharedFrameBusReader::Attach(int read_only_fd, std::string* error) {
+    Close();
+    if (!SharedFrameBus::ValidateConsumerFd(read_only_fd, error)) {
+        return false;
+    }
+    struct stat info{};
+    if (fstat(read_only_fd, &info) != 0) {
+        if (error != nullptr) {
+            *error = "FrameBus consumer stat failed";
+        }
+        return false;
+    }
+    const int duplicate = fcntl(read_only_fd, F_DUPFD_CLOEXEC, 0);
+    if (duplicate < 0) {
+        if (error != nullptr) {
+            *error = std::string("FrameBus reader fd duplication failed: ")
+                    + std::strerror(errno);
+        }
+        return false;
+    }
+    const size_t mapping_size = static_cast<size_t>(info.st_size);
+    void* mapping = mmap(nullptr, mapping_size, PROT_READ, MAP_SHARED, duplicate, 0);
+    if (mapping == MAP_FAILED) {
+        if (error != nullptr) {
+            *error = std::string("FrameBus reader mmap failed: ")
+                    + std::strerror(errno);
+        }
+        close(duplicate);
+        return false;
+    }
+    if (!ValidateHeader(static_cast<const SharedFrameBus::BusHeader*>(mapping),
+                        mapping_size, error)) {
+        munmap(mapping, mapping_size);
+        close(duplicate);
+        return false;
+    }
+    fd_ = duplicate;
+    mapping_ = mapping;
+    mapping_size_ = mapping_size;
+    return true;
+}
+
+void SharedFrameBusReader::Close() {
+    if (mapping_ != nullptr) {
+        munmap(mapping_, mapping_size_);
+    }
+    if (fd_ >= 0) {
+        close(fd_);
+    }
+    fd_ = -1;
+    mapping_ = nullptr;
+    mapping_size_ = 0;
+}
+
+bool SharedFrameBusReader::CopyLatest(
+        SharedFrameBus::Frame* frame,
+        uint64_t* sequence,
+        std::string* error) const {
+    if (!is_attached()) {
+        if (error != nullptr) {
+            *error = "FrameBus reader is not attached";
+        }
+        return false;
+    }
+    return CopyLatestFromMapping(mapping_, mapping_size_, frame, sequence, error);
 }
 
 }  // namespace vcames
