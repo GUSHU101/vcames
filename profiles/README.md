@@ -1,15 +1,12 @@
-# Device Profile catalog
+# Exact-build Profile catalog
 
-This directory contains public, exact-build metadata only. It must never contain vendor camera blobs, OEM libraries, private signing keys, user media, or credentials.
+本目录只保存公开元数据，不保存 vendor blobs、OEM 库、私钥、用户媒体或凭据。当前 catalog 故意为空：
+尚无 Pixel 5 原厂 OTA 完成全部真机 release gates。
 
-The catalog is intentionally empty: the repository has no Google or Xiaomi handset/OTA combination that has completed the release gates yet. A candidate must not be called `VERIFIED` until its device report exists, its compatibility ID and artifact hashes match, and the signed catalog validator accepts it.
-
-Profile v1 is the sole authored compatibility source for front/back replacement. The device-pack builder derives `profile.runtime.properties` inside the module; that file is a deterministic runtime projection and must never be edited or supplied separately.
-
-Run:
+Profile v2 是设备包唯一数据源；构建器生成 runtime projection。运行：
 
 ```bash
 python3 tools/compatibility-builder/validate_profiles.py profiles/catalog.json
 ```
 
-For a release catalog, sign canonical JSON with an offline Ed25519 key. Keep the private key outside the repository and pass the public key to the validator. See `docs/PROFILE_SCHEMA.md` and `docs/RELEASE_GATES.md`.
+非空发布 catalog 与每个 canonical Profile 都必须使用离线 Ed25519 密钥签名。

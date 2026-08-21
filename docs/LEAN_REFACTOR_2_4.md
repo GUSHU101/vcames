@@ -1,18 +1,7 @@
-# 2.4 深度精简记录
+# 3.2 logic reset
 
-本轮按“删除无用户价值的第二路径和推测性配置”执行，净删除超过两千行主链路代码。
+3.2 删除了按包名 Camera Injection、front/back 选择器、额外 external camera 和 Android 11 特判。
+唯一产品链路是 Pixel 5 `legacy/0` Provider 接管：camera 0/1 同时映射到 `/dev/video100`。
 
-已完成：
-
-- 合并 system/root flavor 为单一普通 APK，删除 shared UID 与 DeploymentBridge 双实现；
-- RootAccess 只验证 uid 0，模块安装按实际命令成功与否判断；
-- DeviceProfiler + CompatibilityEngine 收缩为 DeviceProbe + 精确 ProfileResolver；
-- 删除 provisional profile ID、候选兼容性、ROOT 品牌和重复兼容性输入；
-- 删除主产品 external/V4L2 后端、Provider、内核模块打包、外置 feature XML 与全部 UI 参数；
-- 守护进程固定 800 ms 断流失效，adapter 故障回退 OEM；
-- Root 模块收缩为启动、监督、BootGuard 和恢复；Action 只保留可操作信息；
-- PowerShell/Bash 构建器改为 Python 统一实现的薄包装；用户产物只保留一个 APK；
-- 通知权限改为选择本地视频时请求，拒绝不阻断核心链路。
-
-仍需真实设备资源才能完成的事项：Google/Xiaomi 每个 OTA 的合法 adapter、离线签名 Profile
-和完整真机验收。公开仓库不伪造这些结果。
+网络部分也从 HTTP 专用客户端改为受限 FFmpeg argv 管道，统一处理直播协议和容器。旧协议字段被
+Profile v2、bridge schema 4 和 daemon protocol 5 取代，避免旧运行时静默接受新控制命令。

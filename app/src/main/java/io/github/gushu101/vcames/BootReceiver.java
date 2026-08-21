@@ -23,7 +23,14 @@ public final class BootReceiver extends BroadcastReceiver {
         PendingResult pendingResult = goAsync();
         new Thread(() -> {
             try {
-                DaemonClient.start(config);
+                DeploymentManager.StartReadiness readiness =
+                        new DeploymentManager().checkStartReadiness(context);
+                if (!readiness.ready) {
+                    Log.e(TAG, "Boot start blocked: " + readiness.state + ": "
+                            + readiness.message);
+                    return;
+                }
+                DaemonClient.start(context, config);
                 if (config.url.equals("push://local")) {
                     String uri = VCamConfig.loadLocalUri(context);
                     if (!uri.isEmpty()) {

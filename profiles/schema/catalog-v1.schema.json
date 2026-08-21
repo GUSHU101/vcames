@@ -7,7 +7,7 @@
   "required": ["schema_version", "product_scope", "generated_at", "catalog_status", "entries", "signature"],
   "properties": {
     "schema_version": {"const": 1},
-    "product_scope": {"const": "google-xiaomi-android11-13"},
+    "product_scope": {"const": "pixel5-redfin-android11-14-global-provider"},
     "generated_at": {"type": "string", "format": "date-time"},
     "catalog_status": {"enum": ["EMPTY_NO_VERIFIED_PROFILES", "SIGNED_VERIFIED_PROFILES"]},
     "entries": {

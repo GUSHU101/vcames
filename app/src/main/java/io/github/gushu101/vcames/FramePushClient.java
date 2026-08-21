@@ -37,7 +37,7 @@ final class FramePushClient implements Closeable {
                 || nv21.length != expected || nv21.length > MAX_FRAME_BYTES) {
             throw new IOException("NV21 frame metadata or payload is invalid");
         }
-        output.writeInt(2); // SharedFrameBus::PixelFormat::kNv21
+        output.writeInt(2); // VCF2 wire format: NV21
         output.writeInt(width);
         output.writeInt(height);
         output.writeInt(width); // tightly packed Y stride

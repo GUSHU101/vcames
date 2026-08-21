@@ -1,14 +1,14 @@
-# 产品范围
+# Product support
 
-| 项目 | 2.4 范围 |
+| 项目 | 范围 |
 |---|---|
-| 厂商 | Google、Xiaomi/Redmi/POCO |
-| Android | 11–13 / API 30–33 |
+| 设备 | Google Pixel 5 / redfin，仅原厂系统身份 |
+| Android | 11–14 / API 30–34 |
 | ABI | arm64-v8a |
-| 系统 | 已 Root 原厂系统或同源 ROM |
-| 输出 | front、back、both |
-| 部署 | 普通 APK + Root Bridge，无 Xposed/system UID |
+| 替换 | 全局 camera 0（后置）+ camera 1（前置） |
+| 系统层 | v4l2loopback + HIDL 2.4 `legacy/0` replacement Provider |
+| 网络源 | HTTP(S)/HLS/DASH、RTMP 系列、RTSP(S)、SRT、RIST、RTP/SRTP、UDP/TCP、MMS |
+| 本地源 | Android 文件选择器 + MediaCodec |
 
-“范围内”只表示代码路径接受该设备，不表示已有可用 adapter。真正启用必须精确匹配已签名
-VERIFIED Profile。Samsung、Android 14–15、external/V4L2 和定制 ROM 原生集成不属于 2.4
-发布门禁。
+支持声明以签名、精确 OTA 的 VERIFIED Profile 为准。空 catalog 表示目前没有已发布的真机验证设备包。
+APK 只检测现有 ROOT 权限，不安装 KernelSU、Magisk 或模块。

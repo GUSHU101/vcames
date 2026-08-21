@@ -1,16 +1,13 @@
-# 已 Root 原厂系统部署
+# Root stock integration
 
-支持 Google、Xiaomi/Redmi/POCO Android 11–13（API 30–33）arm64。应用只运行
-`su -c id -u` 确认返回 `0`，随后尝试设备实际提供的模块安装命令；不会识别 ROOT 管理器
-名称或推断能力。
+用户先在 Pixel 5 安装并配置 KernelSU/Magisk，再给 APK 的一次性 `su -c id -u` 请求授权。APK 不改变
+ROOT 环境。独立模块在 late_start 阶段校验设备包并接管相机 Provider。
+安装器会依据 KernelSU 的 `KSU=true` 环境把策略源域从 `magisk/magisk_file` 专门化为
+`ksu/ksu_file`；模块不修改 `/system`，因此不依赖 KernelSU metamodule。
 
-1. 安装 `out/release/VCamES-<version>.apk`。
-2. 点击“授权 ROOT 并部署”，在 ROOT 授权界面允许。
-3. 重启设备。
-4. 模块没有已签名精确设备包时会显示 `NEEDS_SIGNED_EXACT_DEVICE_PACK`；这是预期的安全
-   状态，不代表通用 adapter 存在。
-5. 已通过发布门禁的设备包必须包含 `vcames-camera-adapter`、`profile.json`、
-   `profile.sig` 和由构建器生成的 runtime projection。
+精确包包含 `kernel/v4l2loopback.ko`、`bin/vcames-global-camera-provider`、`bin/ffmpeg`、
+`ffmpeg.LICENSE.json`、`licenses/FFmpeg-LGPL-2.1.txt`、signed `profile.json` 和 runtime projection。缺一项即
+`NEEDS_SIGNED_EXACT_DEVICE_PACK`。
 
-模块 Action 只显示模块状态、daemon/proxy/adapter PID、BootGuard、最近错误和恢复命令。
-不要关闭 SELinux；不要把 APK转换为 system UID 应用。
+运行时只停止 Profile 中记录且已校验的 OEM init service。替换 Provider 无法注册或运行中丢失时，
+trap 先终止 VCamES 进程，再 `ctl.start` 恢复同一 OEM service。模块禁用后下次开机不会执行接管。

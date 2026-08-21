@@ -1,8 +1,8 @@
 #include "vcames/config.h"
+#include "vcames/stream_source.h"
 
 #include <algorithm>
 #include <charconv>
-#include <cctype>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -42,6 +42,11 @@ bool ContainsControlCharacter(const std::string& value) {
     });
 }
 
+bool IsSafeProtocolValue(const std::string& value, size_t maximum_length) {
+    return !value.empty() && value.size() <= maximum_length
+            && !ContainsControlCharacter(value);
+}
+
 }  // namespace
 
 bool Config::Validate(std::string* error) const {
@@ -51,21 +56,22 @@ bool Config::Validate(std::string* error) const {
         }
         return false;
     };
-    if ((!url.starts_with("http://") && url != "push://local")
-            || ContainsControlCharacter(url)) {
-        return fail("source must be an http:// URL or push://local");
+    if (url != "push://local" && url != "push://placeholder") {
+        StreamSourceSpec source;
+        if (!ParseStreamSourceUrl(url, &source, error)) {
+            return false;
+        }
+        if (ffmpeg_path.empty() || ffmpeg_path.front() != '/'
+                || ffmpeg_path.size() > 512 || ContainsControlCharacter(ffmpeg_path)) {
+            return fail("FFmpeg path must be a safe absolute path");
+        }
     }
-    if (target != "front" && target != "back" && target != "both") {
-        return fail("target must be front, back, or both");
+    if (!video_device.starts_with("/dev/video")
+            || !IsSafeProtocolValue(video_device, 64)) {
+        return fail("video device must be an absolute /dev/video* path");
     }
-    if (width < 160 || width > 3840 || height < 120 || height > 2160) {
-        return fail("resolution is outside 160x120 through 3840x2160");
-    }
-    if ((width & 1) != 0 || (height & 1) != 0) {
-        return fail("resolution width and height must be even");
-    }
-    if (fps < 1 || fps > 60) {
-        return fail("fps is outside 1 through 60");
+    if (width != 1280 || height != 720 || fps != 30) {
+        return fail("Pixel 5 global Provider output is fixed at 1280x720@30");
     }
     if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) {
         return fail("rotation must be 0, 90, 180, or 270");
@@ -155,7 +161,7 @@ bool ParseCommand(const std::string& request, Command* command, std::string* err
         }
     };
     string_option("url", &config.url);
-    string_option("target", &config.target);
+    string_option("video_device", &config.video_device);
 
     auto int_option = [&values, error](const char* key, int* target) {
         const auto it = values.find(key);
@@ -195,7 +201,7 @@ bool ParseCommand(const std::string& request, Command* command, std::string* err
     }
 
     static const std::unordered_map<std::string, bool> kKnownOptions = {
-        {"url", true}, {"target", true},
+        {"url", true}, {"video_device", true},
         {"width", true}, {"height", true},
         {"fps", true}, {"rotation", true}, {"mirror", true},
     };

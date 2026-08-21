@@ -53,8 +53,6 @@ public final class MainActivity extends Activity {
 
     private EditText urlInput;
     private Spinner sourceInput;
-    private Spinner targetInput;
-    private Spinner outputPresetInput;
     private Spinner rotationInput;
     private CheckBox mirrorInput;
     private CheckBox bootInput;
@@ -89,6 +87,7 @@ public final class MainActivity extends Activity {
         populate(VCamConfig.load(this));
         localMediaUri = VCamConfig.loadLocalUri(this);
         updateLocalMediaLabel();
+        checkRootAccess();
     }
 
     @Override
@@ -129,7 +128,7 @@ public final class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Google / 小米 · Android 11–13 · ROOT · 无 Xposed");
+        subtitle.setText("Pixel 5 (redfin) · 原厂 Android 11–14 · 预先 ROOT");
         subtitle.setTextSize(14);
         subtitle.setTextColor(Color.DKGRAY);
         subtitle.setPadding(0, dp(4), 0, dp(16));
@@ -144,15 +143,14 @@ public final class MainActivity extends Activity {
         root.addView(statusView, matchWithBottom(16));
 
         deploymentView = new TextView(this);
-        deploymentView.setText("部署状态尚未检查。应用只验证 uid 0 和实际模块安装能力，"
-                + "不会猜测 ROOT 管理器品牌。");
+        deploymentView.setText("正在请求 su 并检测 uid 0。APK 不会安装、升级或配置 KSU/Magisk。");
         deploymentView.setTextSize(13);
         deploymentView.setTextColor(Color.rgb(45, 55, 72));
         root.addView(deploymentView, matchWithBottom(6));
 
         Button deploy = new Button(this);
         deploy.setText(deploymentManager.actionLabel());
-        deploy.setOnClickListener(view -> authorizeAndDeploy());
+        deploy.setOnClickListener(view -> checkRootAccess());
         root.addView(deploy, matchWithBottom(14));
 
         Button diagnostics = new Button(this);
@@ -160,23 +158,15 @@ public final class MainActivity extends Activity {
         diagnostics.setOnClickListener(view -> exportDiagnostics());
         root.addView(diagnostics, matchWithBottom(14));
 
-        urlInput = addTextField(root, "私网 HTTP MJPEG 地址", InputType.TYPE_CLASS_TEXT
+        urlInput = addTextField(root, "流媒体地址", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_URI);
         root.addView(fieldLabel("视频来源"), matchWrap());
         sourceInput = new Spinner(this);
         sourceInput.setAdapter(new ArrayAdapter<>(
                 this,
                 android.R.layout.simple_spinner_dropdown_item,
-                new String[]{"私网 HTTP MJPEG", "本地视频（循环）"}));
+                new String[]{"网络流（HTTP/RTMP/RTSP/SRT/RIST/RTP 等）", "本地视频（循环）"}));
         root.addView(sourceInput, matchWithBottom(6));
-
-        root.addView(fieldLabel("替换目标"), matchWrap());
-        targetInput = new Spinner(this);
-        targetInput.setAdapter(new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_dropdown_item,
-                new String[]{"前置摄像头", "后置摄像头", "前置 + 后置"}));
-        root.addView(targetInput, matchWithBottom(8));
 
         LinearLayout localMediaRow = horizontalRow();
         Button chooseMedia = new Button(this);
@@ -192,14 +182,6 @@ public final class MainActivity extends Activity {
         mediaParams.setMarginStart(dp(10));
         localMediaRow.addView(localMediaView, mediaParams);
         root.addView(localMediaRow, matchWithBottom(8));
-
-        root.addView(fieldLabel("输出预设"), matchWrap());
-        outputPresetInput = new Spinner(this);
-        outputPresetInput.setAdapter(new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_dropdown_item,
-                new String[]{"自动（720p 安全值）", "720p / 30", "1080p / 30"}));
-        root.addView(outputPresetInput, matchWithBottom(10));
 
         TextView rotationLabel = fieldLabel("顺时针旋转");
         root.addView(rotationLabel, matchWrap());
@@ -233,10 +215,10 @@ public final class MainActivity extends Activity {
         root.addView(actions, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("明文 MJPEG 仅允许回环、局域网、链路本地或 CGNAT 地址。前置/后置"
-                + "替换保留 OEM camera ID 和 metadata，通过 FrameBus 向精确固件适配器供帧。"
-                + "只有 compatibility_id 与已签名 VERIFIED Profile 完全匹配才会启用；"
-                + "断流或适配器故障时自动失效替换并保留 OEM 相机。");
+        note.setText("Pixel 5 专用运行时在 CameraService 下方接管 legacy/0 Provider，系统相机 0（后置）"
+                + "和 1（前置）默认同时映射到 /dev/video100；不需要选择应用或摄像头。"
+                + "支持 HTTP(S)/HLS/DASH、RTMP(S)、RTSP(S)、SRT、RIST、RTP/SRTP、UDP/TCP 等"
+                + "FFmpeg 网络输入。本地文件只通过系统文件选择器读取。ROOT 必须由用户预先配置并授权。");
         note.setTextSize(13);
         note.setTextColor(Color.DKGRAY);
         note.setPadding(0, dp(16), 0, 0);
@@ -248,8 +230,6 @@ public final class MainActivity extends Activity {
     private void populate(VCamConfig config) {
         urlInput.setText(config.url);
         sourceInput.setSelection(config.url.equals("push://local") ? 1 : 0);
-        targetInput.setSelection(targetPosition(config.target));
-        outputPresetInput.setSelection(presetPosition(config.outputPreset));
         rotationInput.setSelection(config.rotation / 90);
         mirrorInput.setChecked(config.mirror);
         bootInput.setChecked(config.startOnBoot);
@@ -269,7 +249,13 @@ public final class MainActivity extends Activity {
         }
         ioExecutor.execute(() -> {
             try {
-                showStatus(DaemonClient.start(config));
+                DeploymentManager.StartReadiness readiness =
+                        deploymentManager.checkStartReadiness(this);
+                if (!readiness.ready) {
+                    throw new IllegalArgumentException(
+                            readiness.state + "：" + readiness.message);
+                }
+                showStatus(DaemonClient.start(this, config));
                 if (config.url.equals("push://local")) {
                     LocalMediaService.start(this, localMediaUri);
                 } else {
@@ -299,8 +285,6 @@ public final class MainActivity extends Activity {
                 sourceInput.getSelectedItemPosition() == 1
                         ? "push://local"
                         : urlInput.getText().toString().trim(),
-                selectedTarget(),
-                selectedPreset(),
                 rotationInput.getSelectedItemPosition() * 90,
                 mirrorInput.isChecked(),
                 bootInput.isChecked());
@@ -315,10 +299,11 @@ public final class MainActivity extends Activity {
         startActivityForResult(intent, PICK_VIDEO_REQUEST);
     }
 
-    private void authorizeAndDeploy() {
-        deploymentView.setText("正在请求授权并检查部署…");
+    @SuppressLint("SetTextI18n")
+    private void checkRootAccess() {
+        deploymentView.setText("正在请求 su 并检测 uid 0…");
         ioExecutor.execute(() -> {
-            String result = deploymentManager.authorizeAndDeploy(this);
+            String result = deploymentManager.checkRootAccess(this);
             mainHandler.post(() -> deploymentView.setText(result));
         });
     }
@@ -335,42 +320,6 @@ public final class MainActivity extends Activity {
                 startActivityForResult(intent, EXPORT_DIAGNOSTICS_REQUEST);
             });
         });
-    }
-
-    private String selectedTarget() {
-        switch (targetInput.getSelectedItemPosition()) {
-            case 1:
-                return "back";
-            case 2:
-                return "both";
-            default:
-                return "front";
-        }
-    }
-
-    private static int targetPosition(String target) {
-        if (target.equals("front")) {
-            return 0;
-        }
-        if (target.equals("back")) {
-            return 1;
-        }
-        if (target.equals("both")) {
-            return 2;
-        }
-        return 0;
-    }
-
-    private String selectedPreset() {
-        if (outputPresetInput.getSelectedItemPosition() == 2) return "1080p";
-        if (outputPresetInput.getSelectedItemPosition() == 1) return "720p";
-        return "auto";
-    }
-
-    private static int presetPosition(String preset) {
-        if ("1080p".equals(preset)) return 2;
-        if ("720p".equals(preset)) return 1;
-        return 0;
     }
 
     @Override
@@ -436,7 +385,7 @@ public final class MainActivity extends Activity {
             statusColor = Color.rgb(143, 35, 35);
         } else if (readable.contains("LIMITED")) {
             statusColor = Color.rgb(151, 94, 18);
-        } else if (readable.contains("READY_UNVERIFIED")) {
+        } else if (readable.contains("GLOBAL_REPLACEMENT_ACTIVE")) {
             statusColor = Color.rgb(31, 112, 78);
         } else {
             statusColor = Color.rgb(13, 71, 102);
@@ -453,13 +402,10 @@ public final class MainActivity extends Activity {
             report.put("report_schema", 1);
             report.put("app_version", appVersion());
             report.put("generated_at_ms", System.currentTimeMillis());
-            report.put("product_scope", "google-xiaomi-android11-13");
-            report.put("profile_schema", 1);
+            report.put("product_scope", "pixel5-redfin-stock-android11-14");
             String rootDiagnostics = deploymentManager.diagnostics(this);
-            JSONObject profileResolution = ProfileResolver.resolve(this, rootDiagnostics);
             report.put("device_probe", DeviceProbe.collect(this));
-            report.put("profile_resolution", profileResolution);
-            report.put("self_test", SelfTest.run(rootDiagnostics, profileResolution));
+            report.put("self_test", SelfTest.run(rootDiagnostics));
             report.put("root_diagnostics", rootDiagnostics);
             report.put("user_media_included", false);
             report.put("privacy_note", "不包含用户视频、帧内容、账号或网络凭据");
@@ -477,8 +423,8 @@ public final class MainActivity extends Activity {
             zip.closeEntry();
             zip.putNextEntry(new ZipEntry("README.txt"));
             zip.write(("VCamES 兼容性诊断包\n"
-                    + "只包含设备、Camera2、Root/模块与进程状态；不包含任何用户媒体。\n"
-                    + "READY_UNVERIFIED 仍需在对应设备和 OTA 上完成功能与压力验收。\n")
+                    + "只包含 Pixel 5 设备、Camera2、ROOT、全局 Provider 与进程状态；不包含任何用户媒体。\n"
+                    + "GLOBAL_REPLACEMENT_ACTIVE 仍需在对应原厂 OTA 上完成功能与压力验收。\n")
                     .getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
         }

@@ -3,7 +3,9 @@
 # controller UID, and relays only the two VCamES endpoints.
 type vcames_proxy domain
 type vcames_proxy_exec { file_type exec_type }
+type vcames_camera_provider_exec { file_type exec_type }
 type_transition magisk vcames_proxy_exec process vcames_proxy
+type_transition magisk vcames_camera_provider_exec process hal_camera_default
 allow magisk vcames_proxy_exec:file { getattr open read execute map }
 allow magisk vcames_proxy:process { transition signal sigkill sigstop }
 allow vcames_proxy vcames_proxy_exec:file { getattr open read execute map entrypoint }
@@ -13,3 +15,17 @@ allow vcames_proxy self:process { fork setrlimit }
 allow vcames_proxy magisk:unix_stream_socket connectto
 allow vcames_proxy magisk:process sigchld
 allow untrusted_app_all vcames_proxy:unix_stream_socket connectto
+
+# Run the exact-build global replacement Provider in Android's camera HAL domain.
+# The executable lives in the Magisk module, so grant only the traversal and
+# entrypoint permissions needed for that transition.
+allow magisk vcames_camera_provider_exec:file { getattr open read execute map }
+allow magisk hal_camera_default:process { transition signal sigkill sigstop }
+allow hal_camera_default vcames_camera_provider_exec:file { getattr open read execute map entrypoint }
+allow hal_camera_default magisk_file:dir { getattr search }
+allow hal_camera_default magisk:process sigchld
+
+# vcamesd and its FFmpeg child stay in the private Magisk domain so the
+# separately installed executable remains reachable after startup. Ordinary
+# apps can only reach the credential-checking proxy above.
+allow magisk video_device:chr_file { getattr open read write ioctl }

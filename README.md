@@ -1,75 +1,97 @@
-# VCamES
+# VCamES 3.2
 
-VCamES 2.4 是面向已 Root 的 Google、Xiaomi/Redmi/POCO Android 11–13
-（API 30–33）arm64 原厂系统的前/后摄像头替换工程。不使用 Xposed/Zygisk，不申请
-system UID，不修改目标应用，也不会关闭 SELinux。
+VCamES 是只面向 **Google Pixel 5（redfin）原厂 Android 11–14 / API 30–34** 的系统级虚拟摄像头项目。
+手机由用户提前使用 KernelSU/Magisk 等方案取得 ROOT；控制器 APK 只请求并检测 `su` 是否返回 uid 0，
+不会 ROOT 手机、安装 ROOT 管理器或把运行时模块写入设备。
 
-项目只保留一条产品链路：普通 APK 获得用户明确授予的 uid 0 权限后部署轻量 Root
-Bridge；`vcamesd` 随即降权到 Android system UID，经受限 socket proxy 接收本地视频或
-私网 MJPEG，再通过只读 FrameBus v2 把 NV21 帧交给当前设备和 OTA 专用的 Camera
-adapter。adapter 必须与已签名、已验收的 Profile v1 的 `compatibility_id` 完全一致。
-不匹配、断流或 adapter 故障时替换失效并回到 OEM 相机。
+## 系统级全局替换
 
-## 核心能力
+3.2 不再使用应用 Hook、包名白名单或 CameraService Injection。独立运行时停止精确 Profile 记录的
+原厂相机 Provider 服务，并在 CameraService 下方接管已经声明的 HIDL 实例
+`android.hardware.camera.provider@2.4::ICameraProvider/legacy/0`：
 
-- 前置、后置、前后双摄三个目标；保留 OEM camera ID、facing 和 metadata；
-- 本地 MP4 循环播放与私网 HTTP MJPEG；明文网络源仅允许本机、局域网、链路本地、
-  ULA 或 CGNAT 地址；
-- FrameBus v2：4 槽 memfd、sequence lock、PTS/arrival、只读定长 FD；
-- `SO_PEERCRED` 双重 UID 校验、SELinux enforcing、daemon 降权；
-- `DeviceProbe` 生成完整设备/Camera2/ROOT 哈希事实，`ProfileResolver` 只做精确匹配，
-  不按品牌或 SoC 猜测“候选兼容”；
-- BootGuard 连续三次 adapter 故障进入安全模式；模块 Action 只显示状态、PID、最近错误
-  和恢复命令；
-- 单一 Android 应用、单一 Python 构建器、单一用户 APK。PowerShell/Bash 仅为薄包装。
+```text
+网络流 / 本地视频 → FFmpeg / MediaCodec → v4l2loopback(/dev/video100)
+                                             ↓
+                                  legacy/0 replacement Provider
+                                      ├── camera 0 / BACK
+                                      └── camera 1 / FRONT
+                                             ↓
+                                         CameraService
+                                             ↓
+                              Camera1 / Camera2 / CameraX 应用
+```
 
-主产品已移除 system/root 双 flavor、`android.uid.system`、ROOT 管理器品牌识别、
-external/V4L2、手工设备节点、手工宽高/FPS、hold-last、stale/JPEG 质量参数和重复的
-`compatibility.properties` 输入流程，并移除了不再参与产品构建的 AOSP/external 与
-v4l2loopback 历史目录。
+前置和后置默认同时替换，不需要选择目标摄像头或应用。Provider 异常、注册失败、V4L2 丢失或守护进程
+连续失败时，运行时退出接管并重新启动原厂 Provider。SELinux 必须始终保持 Enforcing。
+
+Provider 注册前，daemon 会先把 `/dev/video100` 固定预热为 1280×720@30 并写入黑帧；收到流后统一缩放、
+补边到这一稳定格式，断流时保留最后一帧。这样 CameraService 枚举期间就能得到稳定能力，避免因流分辨率
+变化或首帧未到导致前后摄像头消失。
+
+## 输入协议
+
+网络输入由独立的 Android FFmpeg 可执行文件解复用/解码，支持：
+
+- HTTP/HTTPS（包括 HLS、DASH、MJPEG）；
+- RTMP/RTMPS/RTMPE/RTMPT/RTMPTE/RTMPTS；
+- RTSP/RTSPS、SRT、RIST；
+- RTP/SRTP、UDP/TCP MPEG-TS；
+- MMSH/MMST。
+
+`file`、`concat`、`data`、`subfile`、`unix` 等输入协议被显式禁用；URL 作为单独 argv 传给 FFmpeg，
+不经过 shell。本地媒体只通过 Android Storage Access Framework 选择并由应用解码。
+
+## 两个独立产物
+
+1. `VCamES-3.2.0.apk`：普通控制器，仅检测设备/ROOT/运行时，选择媒体并显示诊断。
+2. `VCamES-Pixel5-Runtime-APIxx.zip`：用户自行通过 ROOT 管理器安装的精确 OTA 运行时。
+
+公开仓库不包含可跨 OTA 使用的 `.ko`、Provider 或 FFmpeg 二进制。`profiles/catalog.json` 在没有完成
+Pixel 5 真机门禁前保持空；因此源码实现不是对任意 OTA 已验证可用的声明。
 
 ## 构建
 
-```powershell
-$env:JAVA_HOME = 'C:\Program Files\Android\openjdk\jdk-21.0.8'
-$env:ANDROID_HOME = 'C:\Android\Sdk'
-$env:ANDROID_NDK_HOME = 'C:\Android\Sdk\ndk\27.2.12479018'
+控制器：
 
-.\gradlew.bat :app:assembleDebug :app:lintDebug
-.\tools\root\build-root-module.ps1 -Api 30
+```bash
+./gradlew :app:assembleDebug :app:lintDebug
 ```
 
-统一构建器输出：
+在与目标原厂 OTA 完全一致的 AOSP/vendor 构建树中生成 Provider：
 
-- `out/release/VCamES-2.4.0.apk`：唯一面向用户的 APK，内置 Root Bridge；
-- `out/developer/VCamES-Root-API30.zip`：仅供开发和诊断的模块产物。
-
-为一台已完成验收的设备打包 adapter：
-
-```powershell
-.\tools\root\build-root-module.ps1 -Api 33 `
-  -ReplacementAdapter C:\device-build\vcames-camera-adapter `
-  -Profile C:\device-build\profile.json `
-  -ProfileSignature C:\device-build\profile.sig `
-  -ProfilePublicKey C:\device-build\release-public.pem
+```bash
+python3 tools/aosp/pixel5-global-provider/apply_global_provider.py /path/to/aosp
+m vcames-global-camera-provider
 ```
 
-构建器拒绝非 `VERIFIED` Profile、API 不一致、缺失签名、adapter 哈希不一致或不完整的
-精确设备哈希。仓库当前 Profile catalog 为空，因此公开构建会诚实显示
-`NEEDS_SIGNED_EXACT_DEVICE_PACK`，不会宣称任何手机/OTA 已完成替换验证。
+打包精确运行时：
 
-## 使用边界
+```powershell
+.\tools\root\build-root-module.ps1 -Api 30 `
+  -KernelModule C:\pixel5-build\v4l2loopback.ko `
+  -ExternalCameraProvider C:\pixel5-build\vcames-global-camera-provider `
+  -Ffmpeg C:\pixel5-build\ffmpeg `
+  -FfmpegManifest C:\pixel5-build\ffmpeg.LICENSE.json `
+  -FfmpegLicense C:\pixel5-build\COPYING.LGPLv2.1 `
+  -Profile C:\pixel5-build\profile.json `
+  -ProfileSignature C:\pixel5-build\profile.sig `
+  -ProfilePublicKey C:\pixel5-build\release-public.pem
+```
 
-- APK 安装后点击“授权 ROOT 并部署”，重启，再配置本地视频或私网 MJPEG；
-- Android 13 的通知权限只会在选择本地视频时按上下文请求，拒绝不会阻断核心配置；
-- secure/protected、RAW、depth 输出必须由 adapter 拒绝并保持 OEM 路径；
-- 不提供身份验证绕过、活体检测规避、反检测或静默录制能力；
-- ROOT 只提供部署权限，不能自动制造跨设备通用 Camera HAL adapter。
+Profile v2 同时绑定 system/vendor 指纹、内核、cameraserver、原厂 Camera HAL 栈、`lshal` Server 对应的
+OEM Provider 路径/哈希、替换 Provider、FFmpeg 和许可清单哈希。Android 11、12、13、14 必须分别构建并
+验收，不能跨 OTA 复用。
 
-详见 [精简架构](docs/ARCHITECTURE.md)、[Profile v1](docs/PROFILE_SCHEMA.md)、
-[Root 原厂系统部署](docs/ROOT_STOCK.md)、[前后摄替换协议](docs/FRONT_BACK_REPLACEMENT.md)、
-[发布门禁](docs/RELEASE_GATES.md) 和 [2.4 精简记录](docs/LEAN_REFACTOR_2_4.md)。
+## 自检
 
-架构和 Windows MJPEG 兼容性参考
-[VCamLab-2.0](https://github.com/GUSHU101/VCamLab-2.0)。项目自有代码采用 Apache-2.0；
-第三方依赖许可证见 [NOTICE](NOTICE)。
+```bash
+cmake -S daemon -B out/host && cmake --build out/host
+ctest --test-dir out/host --output-on-failure
+python3 -m unittest discover -s tools/root/tests -v
+python3 -m unittest discover -s tools/compatibility-builder/tests -v
+python3 -m unittest discover -s tools/aosp/tests -v
+python3 tools/compatibility-builder/validate_profiles.py profiles/catalog.json
+```
+
+真机发布门槛见 [docs/RELEASE_GATES.md](docs/RELEASE_GATES.md)。

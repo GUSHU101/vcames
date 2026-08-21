@@ -1,6 +1,6 @@
 id=vcames_root_bridge
-name=VCamES Root Bridge
+name=VCamES Pixel 5 Runtime
 version=@VERSION_NAME@
 versionCode=@VERSION_CODE@
 author=GUSHU101 and contributors
-description=Lean exact-build VCamES front/back bridge for rooted Google/Xiaomi Android 11-13
+description=Separate Pixel 5 V4L2 and legacy/0 global camera Provider runtime for stock Android 11-14

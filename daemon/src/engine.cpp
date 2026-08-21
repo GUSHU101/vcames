@@ -1,8 +1,8 @@
 #include "vcames/engine.h"
 
-#include "vcames/http_mjpeg_source.h"
+#include "vcames/ffmpeg_source.h"
 #include "vcames/image_transform.h"
-#include "vcames/replacement_adapter.h"
+#include "vcames/stream_source.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,13 +10,10 @@
 #include <system_error>
 #include <utility>
 
-#include <unistd.h>
-
 namespace vcames {
 namespace {
 
 constexpr size_t kMaxFrameBytes = 16 * 1024 * 1024;
-constexpr auto kPersistentOutage = std::chrono::milliseconds(800);
 constexpr int kInternalJpegQuality = 90;
 
 int64_t SteadyNowNs() {
@@ -35,7 +32,8 @@ bool Engine::Start(const Config& config, std::string* error) {
         return false;
     }
     Stop();
-    if (!frame_bus_.Open(SharedFrameBus::kDefaultSlotCapacity, error)) {
+    if (!sink_.Open(config.video_device, config.width, config.height,
+                    config.fps, kMaxFrameBytes, error)) {
         return false;
     }
     {
@@ -43,15 +41,36 @@ bool Engine::Start(const Config& config, std::string* error) {
         config_ = config;
         status_ = RuntimeStatus{};
         status_.running = true;
-        status_.source_connected = config.url == "push://local";
-        status_.frame_bus_ready = true;
-        latest_frame_.reset();
-        latest_generation_ = 0;
+        status_.source_connected = false;
+        status_.sink_open = true;
+        if (config.url == "push://local") {
+            status_.source_label = "LOCAL_SAF";
+        } else if (config.url == "push://placeholder") {
+            status_.source_label = "GLOBAL_PLACEHOLDER";
+        } else {
+            StreamSourceSpec source;
+            std::string ignored;
+            status_.source_label = ParseStreamSourceUrl(config.url, &source, &ignored)
+                    ? source.label : "UNKNOWN";
+        }
+        SourceFrame placeholder;
+        const size_t pixels = static_cast<size_t>(config.width)
+                * static_cast<size_t>(config.height);
+        placeholder.payload.assign(pixels * 3 / 2, 128);
+        std::fill(placeholder.payload.begin(), placeholder.payload.begin() + pixels, 16);
+        placeholder.format = SourceFormat::kNv21;
+        placeholder.width = config.width;
+        placeholder.height = config.height;
+        placeholder.presentation_time_ns = SteadyNowNs();
+        placeholder.arrival_time_ns = placeholder.presentation_time_ns;
+        latest_frame_ = std::make_shared<const SourceFrame>(std::move(placeholder));
+        latest_generation_ = 1;
+        status_.last_frame_time = std::chrono::steady_clock::now();
         stop_requested_.store(false, std::memory_order_relaxed);
     }
     try {
         writer_thread_ = std::thread(&Engine::WriterLoop, this);
-        if (config.url != "push://local") {
+        if (config.url != "push://local" && config.url != "push://placeholder") {
             source_thread_ = std::thread(&Engine::SourceLoop, this);
         }
     } catch (const std::system_error& exception) {
@@ -64,6 +83,24 @@ bool Engine::Start(const Config& config, std::string* error) {
     return true;
 }
 
+bool Engine::WaitForFirstFrameWritten(
+        std::chrono::milliseconds timeout,
+        std::string* error) {
+    std::unique_lock lock(mutex_);
+    condition_.wait_for(lock, timeout, [this] {
+        return status_.frames_written > 0 || !status_.running || !status_.sink_open;
+    });
+    if (status_.frames_written > 0) {
+        return true;
+    }
+    if (error != nullptr) {
+        *error = status_.error.empty()
+                ? "V4L2 placeholder did not produce its first frame in time"
+                : status_.error;
+    }
+    return false;
+}
+
 void Engine::Stop() {
     stop_requested_.store(true, std::memory_order_relaxed);
     condition_.notify_all();
@@ -73,17 +110,12 @@ void Engine::Stop() {
     if (writer_thread_.joinable()) {
         writer_thread_.join();
     }
-    if (replacement_thread_.joinable()) {
-        replacement_thread_.join();
-    }
     std::lock_guard lock(mutex_);
     status_.running = false;
     status_.source_connected = false;
     status_.sink_open = false;
-    status_.frame_bus_ready = false;
-    status_.replacement_attached = false;
     latest_frame_.reset();
-    frame_bus_.Close();
+    sink_.Close();
 }
 
 bool Engine::PushFrame(std::vector<uint8_t>&& jpeg, std::string* error) {
@@ -104,7 +136,7 @@ bool Engine::PushFrame(std::vector<uint8_t>&& jpeg, std::string* error) {
     }
     SourceFrame frame;
     frame.payload = std::move(jpeg);
-    frame.format = SharedFrameBus::PixelFormat::kJpeg;
+    frame.format = SourceFormat::kJpeg;
     frame.presentation_time_ns = SteadyNowNs();
     frame.arrival_time_ns = frame.presentation_time_ns;
     PublishFrame(std::move(frame));
@@ -139,36 +171,13 @@ bool Engine::PushNv21Frame(
     }
     SourceFrame frame;
     frame.payload = std::move(nv21);
-    frame.format = SharedFrameBus::PixelFormat::kNv21;
+    frame.format = SourceFormat::kNv21;
     frame.width = width;
     frame.height = height;
     frame.presentation_time_ns = presentation_time_ns;
     frame.arrival_time_ns = SteadyNowNs();
     PublishFrame(std::move(frame));
     return true;
-}
-
-void Engine::SetReplacementAttached(bool attached) {
-    bool start_monitor = false;
-    {
-        std::lock_guard lock(mutex_);
-        status_.replacement_attached = attached;
-        if (attached) {
-            status_.adapter_error.clear();
-        }
-        start_monitor = attached && status_.running && !replacement_thread_.joinable();
-    }
-    if (start_monitor) {
-        try {
-            replacement_thread_ = std::thread(
-                    &Engine::ReplacementMonitorLoop, this);
-        } catch (const std::system_error& exception) {
-            std::lock_guard lock(mutex_);
-            status_.replacement_attached = false;
-            status_.adapter_error = std::string("unable to start adapter monitor: ")
-                    + exception.what();
-        }
-    }
 }
 
 std::string Engine::StatusJson() const {
@@ -180,49 +189,46 @@ std::string Engine::StatusJson() const {
     }
     std::ostringstream json;
     json << "{\"running\":" << (status_.running ? "true" : "false")
-         << ",\"source\":\"" << (config_.url == "push://local" ? "local" : "mjpeg") << "\""
+         << ",\"source\":\"" << JsonEscape(status_.source_label) << "\""
          << ",\"connected\":" << (status_.source_connected ? "true" : "false")
          << ",\"camera_ready\":" << (status_.sink_open ? "true" : "false")
-         << ",\"frame_bus_ready\":" << (status_.frame_bus_ready ? "true" : "false")
-         << ",\"replacement_attached\":"
-         << (status_.replacement_attached ? "true" : "false")
-         << ",\"replacement_verification\":\"unverified-until-device-content-test\""
-         << ",\"transport\":\"memfd-ring-v2\""
+         << ",\"replacement_scope\":\"global-front-back\""
+         << ",\"replacement_verification\":\"pixel5-legacy-provider-takeover\""
+         << ",\"camera_ids\":[\"0\",\"1\"]"
+         << ",\"transport\":\"ffmpeg-to-v4l2-to-global-provider\""
          << ",\"frame_format\":\"" << JsonEscape(status_.frame_format) << "\""
-         << ",\"target\":\"" << JsonEscape(config_.target) << "\""
          << ",\"received\":" << status_.frames_received
          << ",\"written\":" << status_.frames_written
          << ",\"dropped\":" << status_.frames_dropped
-         << ",\"adapter_health_failures\":" << status_.adapter_health_failures
-         << ",\"adapter_reconnects\":" << status_.adapter_reconnects
          << ",\"source_size\":\"" << status_.source_width << "x" << status_.source_height << "\""
          << ",\"age_ms\":" << age_ms
-         << ",\"error\":\"" << JsonEscape(status_.error) << "\""
-         << ",\"adapter_error\":\"" << JsonEscape(status_.adapter_error) << "\"}";
+         << ",\"error\":\"" << JsonEscape(status_.error) << "\"}";
     return json.str();
 }
 
-int Engine::DuplicateFrameBusFd(std::string* error) const {
-    return frame_bus_.DuplicateFd(error);
-}
-
-std::string Engine::FrameBusDescriptor() const {
-    return frame_bus_.Descriptor();
-}
-
 void Engine::SourceLoop() {
-    HttpMjpegSource source;
+    StreamSourceSpec source_spec;
+    std::string source_parse_error;
+    if (!ParseStreamSourceUrl(config_.url, &source_spec, &source_parse_error)) {
+        std::lock_guard lock(mutex_);
+        status_.error = std::move(source_parse_error);
+        return;
+    }
+    FfmpegSource source;
     int backoff_seconds = 1;
     while (!stop_requested_.load(std::memory_order_relaxed)) {
         std::string stream_error;
         bool connected_once = false;
         source.Stream(
+                config_.ffmpeg_path,
                 config_.url,
+                config_.fps,
+                source_spec,
                 stop_requested_,
                 [this](std::vector<uint8_t>&& jpeg) {
                     SourceFrame frame;
                     frame.payload = std::move(jpeg);
-                    frame.format = SharedFrameBus::PixelFormat::kJpeg;
+                    frame.format = SourceFormat::kJpeg;
                     frame.presentation_time_ns = SteadyNowNs();
                     frame.arrival_time_ns = frame.presentation_time_ns;
                     PublishFrame(std::move(frame));
@@ -253,7 +259,7 @@ void Engine::SourceLoop() {
 }
 
 void Engine::WriterLoop() {
-    SharedFrameBus::Frame bus_frame;
+    std::vector<uint8_t> output_jpeg;
     uint64_t consumed_generation = 0;
     const auto frame_interval = std::chrono::nanoseconds(1'000'000'000LL / config_.fps);
     auto next_write = std::chrono::steady_clock::now();
@@ -261,13 +267,12 @@ void Engine::WriterLoop() {
     while (!stop_requested_.load(std::memory_order_relaxed)) {
         std::shared_ptr<const SourceFrame> source_frame;
         uint64_t generation = consumed_generation;
-        std::chrono::steady_clock::time_point last_frame_time;
         {
             std::unique_lock lock(mutex_);
             condition_.wait_until(lock, next_write,
-                                  [this, consumed_generation, &bus_frame] {
+                                  [this, consumed_generation, &output_jpeg] {
                 return stop_requested_.load(std::memory_order_relaxed)
-                        || (bus_frame.payload.empty()
+                        || (output_jpeg.empty()
                             && latest_generation_ != consumed_generation);
             });
             if (stop_requested_.load(std::memory_order_relaxed)) {
@@ -284,7 +289,6 @@ void Engine::WriterLoop() {
             }
             source_frame = latest_frame_;
             generation = latest_generation_;
-            last_frame_time = status_.last_frame_time;
             if (generation > consumed_generation + 1) {
                 status_.frames_dropped += generation - consumed_generation - 1;
             }
@@ -302,131 +306,87 @@ void Engine::WriterLoop() {
             bool transformed = false;
             int source_width = source_frame->width;
             int source_height = source_frame->height;
-            bus_frame = SharedFrameBus::Frame{};
-            if (source_frame->format == SharedFrameBus::PixelFormat::kJpeg) {
-                transformed = TransformJpegToNv21(
-                        source_frame->payload,
-                        options,
-                        &bus_frame.payload,
-                        &source_width,
-                        &source_height,
-                        &transform_error);
-                bus_frame.format = SharedFrameBus::PixelFormat::kNv21;
-                bus_frame.y_stride = static_cast<uint32_t>(config_.width);
-                bus_frame.uv_stride = static_cast<uint32_t>(config_.width);
-            } else if (source_frame->format == SharedFrameBus::PixelFormat::kNv21) {
+            std::vector<uint8_t> transformed_nv21;
+            output_jpeg.clear();
+            if (source_frame->format == SourceFormat::kJpeg) {
+                if (ReadJpegDimensions(
+                            source_frame->payload,
+                            &source_width,
+                            &source_height,
+                            &transform_error)
+                        && source_width == config_.width
+                        && source_height == config_.height
+                        && config_.rotation == 0 && !config_.mirror) {
+                    output_jpeg = source_frame->payload;
+                    transformed = true;
+                } else {
+                    transform_error.clear();
+                    transformed = TransformJpegToNv21(
+                            source_frame->payload,
+                            options,
+                            &transformed_nv21,
+                            &source_width,
+                            &source_height,
+                            &transform_error);
+                }
+            } else if (source_frame->format == SourceFormat::kNv21) {
                 transformed = TransformNv21(
                         source_frame->payload,
                         source_frame->width,
                         source_frame->height,
                         options,
-                        &bus_frame.payload,
+                        &transformed_nv21,
                         &transform_error);
-                bus_frame.format = SharedFrameBus::PixelFormat::kNv21;
-                bus_frame.y_stride = static_cast<uint32_t>(config_.width);
-                bus_frame.uv_stride = static_cast<uint32_t>(config_.width);
+            }
+            if (transformed && output_jpeg.empty()) {
+                transformed = Nv21ToJpeg(
+                        transformed_nv21,
+                        config_.width,
+                        config_.height,
+                        kInternalJpegQuality,
+                        &output_jpeg,
+                        &transform_error);
             }
             if (transformed) {
-                bus_frame.width = static_cast<uint32_t>(config_.width);
-                bus_frame.height = static_cast<uint32_t>(config_.height);
-                bus_frame.presentation_time_ns = source_frame->presentation_time_ns;
-                bus_frame.arrival_time_ns = source_frame->arrival_time_ns;
                 std::lock_guard lock(mutex_);
                 status_.source_width = source_width;
                 status_.source_height = source_height;
-                status_.frame_format = bus_frame.format == SharedFrameBus::PixelFormat::kNv21
-                        ? "nv21"
-                        : "jpeg";
+                status_.frame_format = "mjpeg";
                 status_.error.clear();
             } else {
                 std::lock_guard lock(mutex_);
                 status_.error = std::move(transform_error);
                 ++status_.frames_dropped;
-                bus_frame.payload.clear();
+                output_jpeg.clear();
             }
             consumed_generation = generation;
         }
 
         const auto now = std::chrono::steady_clock::now();
-        const bool stale = last_frame_time.time_since_epoch().count() == 0
-                || now - last_frame_time > kPersistentOutage;
-        if (stale) {
-            frame_bus_.Invalidate();
-            std::lock_guard lock(mutex_);
-            status_.sink_open = false;
-            next_write = now + frame_interval;
-            continue;
-        }
-        if (bus_frame.payload.empty()) {
+        if (output_jpeg.empty()) {
             next_write = now + frame_interval;
             continue;
         }
 
         std::string sink_error;
-        if (!frame_bus_.Publish(bus_frame, &sink_error)) {
+        if (!sink_.Write(output_jpeg, &sink_error)) {
             std::lock_guard lock(mutex_);
-            status_.frame_bus_ready = false;
             status_.sink_open = false;
             status_.error = std::move(sink_error);
+            condition_.notify_all();
             next_write = now + frame_interval;
             continue;
         }
         {
             std::lock_guard lock(mutex_);
             status_.sink_open = true;
-            status_.frame_bus_ready = true;
             ++status_.frames_written;
         }
+        condition_.notify_all();
         next_write += frame_interval;
         if (next_write < now - frame_interval) {
             next_write = now + frame_interval;
         }
-    }
-}
-
-void Engine::ReplacementMonitorLoop() {
-    int backoff_seconds = 1;
-    while (!WaitForStop(std::chrono::seconds(2))) {
-        std::string health_error;
-        if (CheckReplacementAdapterHealth(&health_error)) {
-            std::lock_guard lock(mutex_);
-            status_.replacement_attached = true;
-            status_.adapter_error.clear();
-            backoff_seconds = 1;
-            continue;
-        }
-        {
-            std::lock_guard lock(mutex_);
-            status_.replacement_attached = false;
-            ++status_.adapter_health_failures;
-            status_.adapter_error = std::move(health_error);
-        }
-
-        std::string reconnect_error;
-        const int frame_bus_fd = frame_bus_.DuplicateFd(&reconnect_error);
-        bool reconnected = false;
-        if (frame_bus_fd >= 0) {
-            DeactivateReplacementAdapter();
-            reconnected = ActivateReplacementAdapter(
-                    config_, frame_bus_fd, frame_bus_.Descriptor(), &reconnect_error);
-            close(frame_bus_fd);
-        }
-        if (reconnected) {
-            std::lock_guard lock(mutex_);
-            status_.replacement_attached = true;
-            ++status_.adapter_reconnects;
-            status_.adapter_error.clear();
-            backoff_seconds = 1;
-            continue;
-        }
-        {
-            std::lock_guard lock(mutex_);
-            status_.adapter_error = std::move(reconnect_error);
-        }
-        if (WaitForStop(std::chrono::seconds(backoff_seconds))) {
-            break;
-        }
-        backoff_seconds = std::min(backoff_seconds * 2, 30);
     }
 }
 

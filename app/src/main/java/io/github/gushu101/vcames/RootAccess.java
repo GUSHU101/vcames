@@ -6,7 +6,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
-/** Minimal uid-0 capability boundary. It deliberately does not identify a Root product. */
+/** Minimal uid-0 capability boundary. It never installs or modifies a Root product. */
 final class RootAccess {
     private static final int MAX_COMMAND_OUTPUT = 64 * 1024;
 
@@ -15,18 +15,6 @@ final class RootAccess {
     static boolean isGranted() {
         CommandResult result = run("id -u", 15);
         return result.completed && result.exitCode == 0 && "0".equals(result.output.trim());
-    }
-
-    static CommandResult installModule(String modulePath) {
-        String module = shellQuote(modulePath);
-        return run(
-                "if command -v magisk >/dev/null 2>&1 && "
-                        + "magisk --install-module " + module + "; then exit 0; fi; "
-                        + "installer=$(command -v ksud 2>/dev/null || true); "
-                        + "[ -n \"$installer\" ] || installer=/data/adb/ksud; "
-                        + "if [ -x \"$installer\" ] && \"$installer\" module install "
-                        + module + "; then exit 0; fi; exit 127",
-                60);
     }
 
     static CommandResult run(String command, int timeoutSeconds) {
@@ -57,10 +45,6 @@ final class RootAccess {
         }
         return new CommandResult(completed, completed ? process.exitValue() : -1,
                 new String(output.toByteArray(), StandardCharsets.UTF_8));
-    }
-
-    private static String shellQuote(String value) {
-        return "'" + value.replace("'", "'\\''") + "'";
     }
 
     private static void collect(InputStream input, ByteArrayOutputStream output) {

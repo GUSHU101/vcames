@@ -18,15 +18,15 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Locale;
 
-/** Read-only facts. It never predicts support; exact support comes from a signed Profile match. */
+/** Read-only facts for the deliberately narrow Pixel 5 product boundary. */
 final class DeviceProbe {
     private DeviceProbe() {}
 
     static JSONObject collect(Context context) {
         JSONObject root = new JSONObject();
         try {
-            root.put("schema", 3);
-            root.put("scope", "google-xiaomi-api30-33-exact-profile-v1");
+            root.put("schema", 4);
+            root.put("scope", "pixel5-redfin-stock-api30-34");
             root.put("manufacturer", Build.MANUFACTURER);
             root.put("brand", Build.BRAND);
             root.put("model", Build.MODEL);
@@ -44,9 +44,14 @@ final class DeviceProbe {
             if (Build.VERSION.SDK_INT >= 31) {
                 root.put("soc_manufacturer", Build.SOC_MANUFACTURER);
                 root.put("soc_model", Build.SOC_MODEL);
+            } else {
+                root.put("soc_manufacturer", "Qualcomm");
+                root.put("soc_model", "SM7250");
             }
             root.put("cameras", cameraInventory(context));
-            root.put("compatibility_id", "REQUIRES_ROOT_DEVICE_PROBE");
+            Pixel5Support.Result support = Pixel5Support.inspect();
+            root.put("platform_supported", support.platformAccepted());
+            root.put("camera_backend", support.backend);
         } catch (JSONException failure) {
             try {
                 root.put("error", "device probe serialization failed");

@@ -4,6 +4,15 @@ Copyright 2026 GUSHU101 and contributors
 This product contains stb_image and stb_image_write by Sean Barrett and
 contributors. See daemon/third_party/stb/LICENSE for its license terms.
 
-Android and Pixel are trademarks of Google LLC; Xiaomi, Redmi and POCO marks
-belong to their respective owners. This project is not endorsed
-by or affiliated with those vendors.
+The Pixel 5 global Provider tooling patches Android Open Source Project camera
+HAL sources licensed under Apache License 2.0. The repository does not include
+Google proprietary camera binaries.
+
+An exact device runtime may separately distribute FFmpeg under
+LGPL-2.1-or-later. Such a runtime must include its canonical
+ffmpeg.LICENSE.json plus the LGPL-2.1 license text, source URL, revision, build
+configuration and binary hash. GPL and nonfree FFmpeg configurations are
+rejected by the release builder.
+
+Android and Pixel are trademarks of Google LLC. This project is not endorsed
+by or affiliated with Google.

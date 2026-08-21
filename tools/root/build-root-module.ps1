@@ -1,8 +1,12 @@
 [CmdletBinding()]
 param(
-    [ValidateRange(30, 33)][int]$Api = 30,
+    [ValidateRange(30, 34)][int]$Api = 30,
     [string]$NdkPath = '',
-    [string]$ReplacementAdapter = '',
+    [string]$KernelModule = '',
+    [string]$ExternalCameraProvider = '',
+    [string]$Ffmpeg = '',
+    [string]$FfmpegManifest = '',
+    [string]$FfmpegLicense = '',
     [string]$Profile = '',
     [string]$ProfileSignature = '',
     [string]$ProfilePublicKey = '',
@@ -12,7 +16,11 @@ $ErrorActionPreference = 'Stop'
 $builder = Join-Path $PSScriptRoot 'build_device_pack.py'
 $arguments = @($builder, '--api', $Api)
 if ($NdkPath) { $arguments += @('--ndk', $NdkPath) }
-if ($ReplacementAdapter) { $arguments += @('--adapter', $ReplacementAdapter) }
+if ($KernelModule) { $arguments += @('--kernel-module', $KernelModule) }
+if ($ExternalCameraProvider) { $arguments += @('--provider', $ExternalCameraProvider) }
+if ($Ffmpeg) { $arguments += @('--ffmpeg', $Ffmpeg) }
+if ($FfmpegManifest) { $arguments += @('--ffmpeg-manifest', $FfmpegManifest) }
+if ($FfmpegLicense) { $arguments += @('--ffmpeg-license', $FfmpegLicense) }
 if ($Profile) { $arguments += @('--profile', $Profile) }
 if ($ProfileSignature) { $arguments += @('--profile-signature', $ProfileSignature) }
 if ($ProfilePublicKey) { $arguments += @('--profile-public-key', $ProfilePublicKey) }

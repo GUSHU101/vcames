@@ -15,20 +15,31 @@ void TestCommand() {
     const std::string request =
             "START\n"
             "url=http://127.0.0.1:8888/live.mjpg?token=a=b\n"
-            "target=both\n"
-            "width=1920\nheight=1080\nfps=30\nrotation=90\n"
+            "video_device=/dev/video100\n"
+            "width=1280\nheight=720\nfps=30\nrotation=90\n"
             "mirror=1\n.\n";
     assert(vcames::ParseCommand(request, &command, &error));
     assert(command.type == vcames::CommandType::kStart);
-    assert(command.config.width == 1920);
-    assert(command.config.target == "both");
+    assert(command.config.width == 1280);
+    assert(command.config.height == 720);
     assert(command.config.rotation == 90);
     assert(command.config.mirror);
 
     assert(!vcames::ParseCommand("START\nwidth=nope\n.\n", &command, &error));
-    assert(!vcames::ParseCommand("START\nwidth=641\nheight=480\n.\n", &command, &error));
-    assert(!vcames::ParseCommand("START\ntarget=external\n.\n", &command, &error));
-    assert(!vcames::ParseCommand("START\ntarget=sideways\n.\n", &command, &error));
+    assert(!vcames::ParseCommand(
+            "START\nwidth=641\nheight=480\n.\n", &command, &error));
+    assert(!vcames::ParseCommand(
+            "START\nwidth=1920\nheight=1080\n.\n", &command, &error));
+    assert(!vcames::ParseCommand(
+            "START\ntarget=front\n.\n", &command, &error));
+    assert(!vcames::ParseCommand(
+            "START\npackage_name=com.example.camera\n.\n", &command, &error));
+    assert(vcames::ParseCommand("START\nurl=rtmp://example.test/live/key\n.\n",
+                                &command, &error));
+    assert(vcames::ParseCommand("START\nurl=srt://example.test:9000\n.\n",
+                                &command, &error));
+    assert(!vcames::ParseCommand("START\nurl=file:///sdcard/video.mp4\n.\n",
+                                 &command, &error));
     assert(!vcames::ParseCommand("UNKNOWN\n.\n", &command, &error));
     assert(vcames::ParseCommand("STATUS\n.\n", &command, &error));
 }

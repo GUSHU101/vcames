@@ -8,12 +8,6 @@ val releaseProperties = Properties().apply {
     rootProject.file("version.properties").inputStream().use(::load)
 }
 
-val syncProfileCatalog = tasks.register<Copy>("syncProfileCatalog") {
-    from(rootProject.file("profiles/catalog.json"))
-    into(project.layout.buildDirectory.dir("generated/profileAssets"))
-    rename { "profile-catalog.json" }
-}
-
 android {
     namespace = "io.github.gushu101.vcames"
     compileSdk = 35
@@ -52,13 +46,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
-    sourceSets.getByName("main").assets.srcDir(
-        project.layout.buildDirectory.dir("generated/rootBridgeAssets")
-    )
-    sourceSets.getByName("main").assets.srcDir(
-        project.layout.buildDirectory.dir("generated/profileAssets")
-    )
-
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -70,15 +57,11 @@ android {
         abortOnError = true
         warningsAsErrors = true
         // Compile/target SDK can be newer than the deliberately narrow
-        // runtime support matrix (Android 11-13 / API 30-33).
+        // runtime support matrix (Pixel 5 Android 11-14 / API 30-34).
         disable += setOf(
             "ChromeOsAbiSupport",
             "ExpiredTargetSdkVersion",
             "OldTargetApi"
         )
     }
-}
-
-tasks.named("preBuild").configure {
-    dependsOn(syncProfileCatalog)
 }

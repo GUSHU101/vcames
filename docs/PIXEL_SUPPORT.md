@@ -1,7 +1,7 @@
-# Pixel 支持说明（已迁移）
+# Pixel 5 support
 
-Pixel 不再是单独硬编码的开发范围。Google 设备与 Xiaomi/Redmi/POCO 一样，
-按精确 `compatibility_id`、Camera HIDL/AIDL 实测和完整 OTA 哈希匹配已签名 Profile。
+VCamES 3.2 仅接受 `manufacturer=Google`、`brand=google`、`device=redfin`、`product=redfin*`、
+arm64-v8a 和 API 30–34。其他 Pixel、其他厂商和 Android 15+ 直接拒绝。
 
-请阅读 [产品范围](PRODUCT_SUPPORT.md)。Pixel 4–6 仍分别进入 Qualcomm/Tensor
-路线，但 Android 14–15 的宽泛矩阵不作为 VCamES 2.4 的兼容声明。
+Android 11–14 统一使用冻结的 HIDL 2.4 `legacy/0` 接管合同，但每个原厂 build 的内核模块、Provider、
+FFmpeg 和系统哈希必须精确匹配。统一架构不等于二进制可跨 OTA 复用。

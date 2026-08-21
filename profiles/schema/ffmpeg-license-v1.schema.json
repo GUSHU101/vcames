@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/GUSHU101/vcames/profiles/schema/ffmpeg-license-v1.schema.json",
+  "title": "VCamES FFmpeg LGPL runtime manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "license", "source_url", "source_revision", "build_configuration", "binary_sha256", "license_text_sha256", "input_protocols", "demuxers", "decoders", "filters", "encoders"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"const": "FFmpeg"},
+    "license": {"const": "LGPL-2.1-or-later"},
+    "source_url": {"type": "string", "pattern": "^https://"},
+    "source_revision": {"type": "string", "minLength": 1},
+    "build_configuration": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "license_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "input_protocols": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "demuxers": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "decoders": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "filters": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "encoders": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  }
+}

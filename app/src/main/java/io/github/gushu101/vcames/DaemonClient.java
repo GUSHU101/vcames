@@ -1,5 +1,6 @@
 package io.github.gushu101.vcames;
 
+import android.content.Context;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
 
@@ -13,7 +14,7 @@ final class DaemonClient {
 
     private DaemonClient() {}
 
-    static String start(VCamConfig config) throws IOException {
+    static String start(Context context, VCamConfig config) throws IOException {
         return request(config.toStartCommand());
     }
 
@@ -29,7 +30,9 @@ final class DaemonClient {
         try (LocalSocket socket = new LocalSocket()) {
             socket.connect(
                     new LocalSocketAddress(SOCKET_NAME, LocalSocketAddress.Namespace.ABSTRACT));
-            socket.setSoTimeout(2000);
+            // START waits until the black/first frame has actually reached
+            // /dev/video100, so allow the daemon's bounded five-second gate.
+            socket.setSoTimeout(8000);
             socket.getOutputStream().write(command.getBytes(StandardCharsets.UTF_8));
             socket.getOutputStream().flush();
             socket.shutdownOutput();

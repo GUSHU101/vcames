@@ -1,82 +1,101 @@
 package io.github.gushu101.vcames;
 
 import android.content.Context;
+import android.os.Build;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-
-/** The single supported deployment path: an ordinary APK using an explicitly granted uid-0 shell. */
+/** Checks an already-rooted Pixel 5. It never installs Magisk, KernelSU, or a Root module. */
 final class DeploymentManager {
-    private static final String MODULE_ASSET = "vcames-root-bridge.zip";
-
     String actionLabel() {
-        return "授权 ROOT 并部署";
+        return "检测 ROOT 权限";
     }
 
-    String authorizeAndDeploy(Context context) {
-        if (!RootAccess.isGranted()) {
-            return "未获得 ROOT。请在设备的 ROOT 授权界面允许 VCamES。";
+    String checkRootAccess(Context context) {
+        Pixel5Support.Result device = Pixel5Support.inspect();
+        if (!device.platformAccepted()) {
+            return "设备不在支持范围：" + device.rejection();
         }
-        final RootBridgeManifest manifest;
-        try {
-            manifest = RootBridgeManifest.fromAsset(context);
-        } catch (IOException invalidPayload) {
-            return "ROOT 已授权，但 APK 内置 Root Bridge 无效：" + invalidPayload.getMessage();
+        if (!RootAccess.isGranted()) {
+            return "未获得 ROOT：请在已安装的 KSU/Magisk 授权界面允许 VCamES，然后重试。"
+                    + "APK 不会安装或修改 ROOT 工具。";
+        }
+        return "ROOT 检测通过：VCamES 的 su 命令得到 uid 0。\n"
+                + "设备：Pixel 5 (redfin) · API " + Build.VERSION.SDK_INT + "\n"
+                + "后端：" + device.backend + "\n"
+                + "APK 未安装、升级或配置任何 ROOT 管理器。";
+    }
+
+    StartReadiness checkStartReadiness(Context context) {
+        Pixel5Support.Result device = Pixel5Support.inspect();
+        if (!device.platformAccepted()) {
+            return StartReadiness.blocked("UNSUPPORTED_DEVICE", device.rejection());
+        }
+        if (!RootAccess.isGranted()) {
+            return StartReadiness.blocked(
+                    "ROOT_NOT_GRANTED", "su 未返回 uid 0，请先给 VCamES 授予 ROOT 权限");
         }
         String diagnostic = diagnostics(context);
-        if (diagnostic.contains("module=installed") && manifest.matchesInstalled(diagnostic)) {
-            return "ROOT 已授权，Root Bridge " + manifest.versionName + " 已匹配。\n" + diagnostic;
+        if (!"ready".equals(field(diagnostic, "video_device="))) {
+            return StartReadiness.blocked(
+                    "CAMERA_RUNTIME_NOT_READY",
+                    "未发现 /dev/video100。APK 只检测和使用已有 ROOT，不会安装 KSU/Magisk 模块或加载未知内核模块");
         }
-
-        File payload = new File(context.getCacheDir(), MODULE_ASSET);
-        try (InputStream input = context.getAssets().open(MODULE_ASSET);
-             FileOutputStream output = new FileOutputStream(payload, false)) {
-            byte[] buffer = new byte[16 * 1024];
-            int count;
-            long total = 0;
-            while ((count = input.read(buffer)) != -1) {
-                total += count;
-                if (total > 128L * 1024L * 1024L) {
-                    throw new IOException("Root Bridge exceeds the 128 MiB safety limit");
-                }
-                output.write(buffer, 0, count);
-            }
-        } catch (IOException noPayload) {
-            return "ROOT 已授权，但此 APK 没有内置 Root Bridge。请安装 release APK。";
+        if (!"READY_GLOBAL_FRONT_BACK".equals(field(diagnostic, "runtime_status="))
+                || "stopped".equals(field(diagnostic, "provider_pid="))) {
+            return StartReadiness.blocked(
+                    "CAMERA_RUNTIME_NOT_READY",
+                    "Pixel 5 legacy/0 全局 Provider 尚未完成安全接管；请预先安装与当前原厂版本精确匹配的独立运行时");
         }
-        RootAccess.CommandResult install = RootAccess.installModule(payload.getAbsolutePath());
-        //noinspection ResultOfMethodCallIgnored
-        payload.delete();
-        if (!install.completed || install.exitCode != 0) {
-            return "Root Bridge 安装失败；SELinux 未被关闭。\n" + install.summary();
-        }
-        return "Root Bridge 已安装。请重启后检查 READY/SAFE_MODE 状态。\n"
-                + install.output.trim();
+        return StartReadiness.ready(
+                "ROOT、Pixel 5 平台、V4L2 节点和相机 0/1 全局 Provider 已就绪");
     }
 
     String diagnostics(Context context) {
+        Pixel5Support.Result device = Pixel5Support.inspect();
         if (!RootAccess.isGranted()) {
-            return "root_granted=false";
+            return "root_granted=false\n"
+                    + "platform_supported=" + device.platformAccepted() + "\n"
+                    + "camera_backend=" + device.backend;
         }
-        String command = "printf 'root_granted=true\\n'; "
-                + "if [ -x /data/adb/modules/vcames_root_bridge/device-probe.sh ]; then "
-                + "sh /data/adb/modules/vcames_root_bridge/device-probe.sh; "
-                + "else printf 'compatibility_id=UNAVAILABLE_MODULE_NOT_INSTALLED\\n'; fi; "
-                + "printf 'status='; cat /data/adb/vcames/status.txt 2>/dev/null || printf UNKNOWN; "
-                + "if [ -d /data/adb/modules/vcames_root_bridge ]; then "
-                + "printf '\\nmodule=installed module_version='; "
-                + "sed -n 's/^versionCode=//p' /data/adb/modules/vcames_root_bridge/module.prop | head -n 1; "
-                + "printf ' module_bridge_schema='; sed -n 's/^bridge_schema=//p' "
-                + "/data/adb/modules/vcames_root_bridge/bridge.properties | head -n 1; "
-                + "printf ' module_daemon_protocol='; sed -n 's/^daemon_protocol=//p' "
-                + "/data/adb/modules/vcames_root_bridge/bridge.properties | head -n 1; "
-                + "printf ' module_frame_bus_version='; sed -n 's/^frame_bus_version=//p' "
-                + "/data/adb/modules/vcames_root_bridge/bridge.properties | head -n 1; "
-                + "printf ' module_profile_schema='; sed -n 's/^profile_schema=//p' "
-                + "/data/adb/modules/vcames_root_bridge/bridge.properties | head -n 1; "
-                + "else printf '\\nmodule=missing'; fi";
-        return RootAccess.run(command, 20).summary();
+        String command = "printf 'root_granted=true\\nroot_uid='; id -u; "
+                + "printf 'selinux='; getenforce 2>/dev/null || printf UNKNOWN; "
+                + "printf '\\nkernel_release='; uname -r; "
+                + "printf '\\nruntime_status='; tr -d '\\\\r\\\\n ' </data/adb/vcames/status.txt 2>/dev/null || printf UNKNOWN; "
+                + "printf '\\nvideo_device='; [ -c /dev/video100 ] && printf ready || printf missing; "
+                + "printf '\\nprovider_pid='; pidof vcames-global-camera-provider 2>/dev/null || printf stopped; "
+                + "printf '\\nprovider_hal='; lshal 2>/dev/null | grep -F 'android.hardware.camera.provider@2.4::ICameraProvider/legacy/0' | head -n 1 | tr -d '\\\\r\\\\n' || printf missing; "
+                + "printf '\\nffmpeg='; [ -x /data/adb/modules/vcames_root_bridge/bin/ffmpeg ] && printf ready || printf missing; "
+                + "printf '\\ndaemon_pid='; pidof vcamesd 2>/dev/null || printf stopped";
+        return "platform_supported=" + device.platformAccepted() + "\n"
+                + "camera_backend=" + device.backend + "\n"
+                + RootAccess.run(command, 20).summary();
+    }
+
+    private static String field(String output, String prefix) {
+        int start = output.indexOf(prefix);
+        if (start < 0) return "";
+        start += prefix.length();
+        int end = start;
+        while (end < output.length() && !Character.isWhitespace(output.charAt(end))) end++;
+        return output.substring(start, end);
+    }
+
+    static final class StartReadiness {
+        final boolean ready;
+        final String state;
+        final String message;
+
+        private StartReadiness(boolean ready, String state, String message) {
+            this.ready = ready;
+            this.state = state;
+            this.message = message;
+        }
+
+        static StartReadiness ready(String message) {
+            return new StartReadiness(true, "READY", message);
+        }
+
+        static StartReadiness blocked(String state, String message) {
+            return new StartReadiness(false, state, message);
+        }
     }
 }

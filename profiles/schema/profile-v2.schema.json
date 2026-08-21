@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/GUSHU101/vcames/profiles/schema/profile-v2.schema.json",
+  "title": "VCamES Pixel 5 exact-build global Provider Profile v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "compatibility_id", "vendor_family", "soc_family", "api",
+    "device", "build", "camera_hal", "hashes", "capabilities", "resources", "validation"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "compatibility_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "vendor_family": {"const": "google"},
+    "soc_family": {"const": "qualcomm"},
+    "api": {"type": "integer", "minimum": 30, "maximum": 34},
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manufacturer", "product", "device", "model"],
+      "properties": {
+        "manufacturer": {"const": "Google"},
+        "product": {"const": "redfin"},
+        "device": {"const": "redfin"},
+        "model": {"const": "Pixel 5"},
+        "region": {"type": "string"}
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build_id", "security_patch", "system_fingerprint_sha256", "vendor_fingerprint_sha256", "kernel_release_sha256"],
+      "properties": {
+        "build_id": {"type": "string", "minLength": 1},
+        "security_patch": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "system_fingerprint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "vendor_fingerprint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "kernel_release_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "camera_hal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transport", "provider_instance", "provider_interface", "registration", "replacement_scope", "back_camera_id", "front_camera_id", "v4l2_device", "oem_provider_service", "oem_provider_binary"],
+      "properties": {
+        "transport": {"enum": ["hidl", "mixed"]},
+        "provider_instance": {"const": "legacy/0"},
+        "provider_interface": {"const": "android.hardware.camera.provider@2.4::ICameraProvider/legacy/0"},
+        "registration": {"const": "oem-service-takeover"},
+        "replacement_scope": {"const": "global-front-back"},
+        "back_camera_id": {"const": "0"},
+        "front_camera_id": {"const": "1"},
+        "v4l2_device": {"const": "/dev/video100"},
+        "oem_provider_service": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"},
+        "oem_provider_binary": {"type": "string", "pattern": "^/(vendor|odm)/bin/hw/[A-Za-z0-9@._+-]+$"}
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "required": [
+        "kernel_module_sha256", "global_provider_sha256", "ffmpeg_sha256",
+        "ffmpeg_manifest_sha256", "ffmpeg_license_sha256", "cameraserver_sha256", "camera_provider_sha256", "oem_provider_binary_sha256",
+        "vendor_camera_libraries_sha256", "graphics_stack_sha256"
+      ],
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["global_front", "global_back"],
+      "properties": {
+        "global_front": {"const": true},
+        "global_back": {"const": true}
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contains_proprietary_oem_files", "artifact_sha256"],
+      "properties": {
+        "contains_proprietary_oem_files": {"const": false},
+        "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "report"],
+      "properties": {
+        "status": {"enum": ["CANDIDATE", "VERIFIED", "REJECTED"]},
+        "report": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

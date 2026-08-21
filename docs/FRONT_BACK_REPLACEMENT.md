@@ -1,12 +1,14 @@
-# 前后摄替换协议
+# Global front/back replacement
 
-adapter 是设备 + OTA 专用组件，必须保留 OEM camera ID、facing、静态 metadata、时间戳
-和客户端协商边界。secure/protected、RAW、depth 等不能安全替换的流必须拒绝并回到 OEM。
+没有“替换目标”设置。Pixel 5 Provider 固定公开：
 
-启动协议固定为 adapter protocol 2：`GET_INFO` → `PROBE(require_exact_build=1)` →
-`ATTACH_BUS` → `ACTIVATE` → `HEALTH`。FrameBus FD 为只读、定长、密封 memfd；adapter
-响应必须确认 `memory_access=read-only`、`metadata=preserved` 和
-`failure_policy=oem-passthrough`。
+| CameraService ID | Facing | Orientation | Frame source |
+|---|---|---:|---|
+| `0` | BACK | 90° | `/dev/video100` |
+| `1` | FRONT | 270° | `/dev/video100` |
 
-daemon 每两秒健康检查并重新附着。源断流超过 800 ms 会 invalidate FrameBus，而不是无限
-保持最后一帧。adapter 连续三次启动/运行故障后 BootGuard 写入安全模式标记，不再尝试替换。
+所有通过标准 Camera1、Camera2 或 CameraX 打开 0/1 的应用自动进入替换链路。项目不按包名过滤，
+不产生额外 `LENS_FACING_EXTERNAL` 摄像头，也不依赖 Android 12 才有的 Injection API。
+
+并发打开 0 和 1 依赖 v4l2loopback 多读者和 AOSP external-device session 的真机行为，必须纳入每个
+OTA 的验证报告；未经该测试的 Profile 不能标记 VERIFIED。

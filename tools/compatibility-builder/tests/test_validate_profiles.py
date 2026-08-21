@@ -23,7 +23,7 @@ class CatalogValidationTest(unittest.TestCase):
             path = Path(temporary) / "catalog.json"
             path.write_text(json.dumps({
                 "schema_version": 1,
-                "product_scope": "google-xiaomi-android11-13",
+                "product_scope": "pixel5-redfin-android11-14-global-provider",
                 "catalog_status": "EMPTY_NO_VERIFIED_PROFILES",
                 "entries": [],
                 "signature": {"status": "UNSIGNED_DEVELOPMENT", "algorithm": "Ed25519",
@@ -36,7 +36,7 @@ class CatalogValidationTest(unittest.TestCase):
             path = Path(temporary) / "catalog.json"
             path.write_text(json.dumps({
                 "schema_version": 1,
-                "product_scope": "google-xiaomi-android11-13",
+                "product_scope": "pixel5-redfin-android11-14-global-provider",
                 "catalog_status": "SIGNED_VERIFIED_PROFILES",
                 "entries": [{"compatibility_id": "0" * 64, "profile": "missing.json",
                              "signature": "missing.sig", "status": "CANDIDATE"}],

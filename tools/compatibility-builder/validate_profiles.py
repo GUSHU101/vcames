@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict release gate for the VCamES Profile v1 catalog (stdlib only)."""
+"""Strict release gate for the VCamES Pixel 5 global Provider catalog."""
 
 from __future__ import annotations
 
@@ -72,47 +72,75 @@ def validate_profile(path: Path, expected_id: str, repository_root: Path) -> Non
     profile = load_json(path)
     if path.read_bytes() != canonical_bytes(profile):
         raise ValidationError(f"{path}: release Profile JSON must be canonical")
-    if profile.get("schema_version") != 1:
-        raise ValidationError(f"{path}: schema_version must be 1")
+    if profile.get("schema_version") != 2:
+        raise ValidationError(f"{path}: schema_version must be 2")
     if profile.get("compatibility_id") != expected_id:
         raise ValidationError(f"{path}: compatibility_id does not match catalog")
     require_hex(expected_id, f"{path}.compatibility_id")
-    if profile.get("vendor_family") not in {"google", "xiaomi"}:
-        raise ValidationError(f"{path}: unsupported vendor_family")
-    if profile.get("soc_family") not in {"tensor", "qualcomm", "mediatek"}:
-        raise ValidationError(f"{path}: unsupported soc_family")
+    if profile.get("vendor_family") != "google":
+        raise ValidationError(f"{path}: only Google Pixel 5 is supported")
+    if profile.get("soc_family") != "qualcomm":
+        raise ValidationError(f"{path}: Pixel 5 must use the Qualcomm profile")
     api = profile.get("api")
-    if not isinstance(api, int) or isinstance(api, bool) or not 30 <= api <= 33:
-        raise ValidationError(f"{path}: api must be 30..33")
+    if not isinstance(api, int) or isinstance(api, bool) or not 30 <= api <= 34:
+        raise ValidationError(f"{path}: global Provider profile api must be 30..34")
 
     device = required_object(profile, "device", str(path))
     for key in ("manufacturer", "product", "device", "model"):
         if not isinstance(device.get(key), str) or not device[key].strip():
             raise ValidationError(f"{path}.device.{key} is required")
+    if (device["manufacturer"] != "Google" or device["product"] != "redfin"
+            or device["device"] != "redfin" or device["model"] != "Pixel 5"):
+        raise ValidationError(f"{path}.device must identify Google Pixel 5 (redfin)")
     build = required_object(profile, "build", str(path))
     if not isinstance(build.get("build_id"), str) or not build["build_id"].strip():
         raise ValidationError(f"{path}.build.build_id is required")
     if not isinstance(build.get("security_patch"), str) or not PATCH.fullmatch(build["security_patch"]):
         raise ValidationError(f"{path}.build.security_patch must be YYYY-MM-DD")
-    for key in ("system_fingerprint_sha256", "vendor_fingerprint_sha256"):
+    for key in ("system_fingerprint_sha256", "vendor_fingerprint_sha256",
+                "kernel_release_sha256"):
         require_hex(build.get(key), f"{path}.build.{key}")
 
     camera_hal = required_object(profile, "camera_hal", str(path))
-    if camera_hal.get("transport") not in {"hidl", "aidl", "mixed"}:
+    if camera_hal.get("transport") not in {"hidl", "mixed"}:
         raise ValidationError(f"{path}.camera_hal.transport is invalid")
-    if not isinstance(camera_hal.get("provider_instance"), str) or not camera_hal["provider_instance"]:
-        raise ValidationError(f"{path}.camera_hal.provider_instance is required")
+    expected_hal = {
+        "provider_instance": "legacy/0",
+        "provider_interface":
+            "android.hardware.camera.provider@2.4::ICameraProvider/legacy/0",
+        "registration": "oem-service-takeover",
+        "replacement_scope": "global-front-back",
+        "back_camera_id": "0",
+        "front_camera_id": "1",
+        "v4l2_device": "/dev/video100",
+    }
+    for key, expected in expected_hal.items():
+        if camera_hal.get(key) != expected:
+            raise ValidationError(f"{path}.camera_hal.{key} must be {expected}")
+    service = camera_hal.get("oem_provider_service")
+    if not isinstance(service, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", service):
+        raise ValidationError(f"{path}.camera_hal.oem_provider_service is invalid")
+    binary = camera_hal.get("oem_provider_binary")
+    if not isinstance(binary, str) or not re.fullmatch(
+            r"/(vendor|odm)/bin/hw/[A-Za-z0-9@._+-]+", binary):
+        raise ValidationError(f"{path}.camera_hal.oem_provider_binary is invalid")
     hashes = required_object(profile, "hashes", str(path))
-    if len(hashes) < 4:
-        raise ValidationError(f"{path}.hashes requires at least four artifacts")
+    required_hashes = {
+        "kernel_module_sha256", "global_provider_sha256", "ffmpeg_sha256",
+        "ffmpeg_manifest_sha256", "ffmpeg_license_sha256", "cameraserver_sha256",
+        "camera_provider_sha256", "vendor_camera_libraries_sha256", "graphics_stack_sha256",
+        "oem_provider_binary_sha256",
+    }
+    missing_hashes = required_hashes - hashes.keys()
+    if missing_hashes:
+        raise ValidationError(
+            f"{path}.hashes missing: {', '.join(sorted(missing_hashes))}")
     for key, value in hashes.items():
         require_hex(value, f"{path}.hashes.{key}")
     capabilities = required_object(profile, "capabilities", str(path))
-    if set(capabilities) != {"front", "back"}:
-        raise ValidationError(f"{path}.capabilities must contain only front and back")
-    for key in ("front", "back"):
-        if not isinstance(capabilities.get(key), bool):
-            raise ValidationError(f"{path}.capabilities.{key} must be boolean")
+    if capabilities != {"global_front": True, "global_back": True}:
+        raise ValidationError(
+            f"{path}.capabilities must enable global_front and global_back")
     resources = required_object(profile, "resources", str(path))
     if resources.get("contains_proprietary_oem_files") is not False:
         raise ValidationError(f"{path}: proprietary OEM resources are forbidden")
@@ -151,7 +179,7 @@ def validate_catalog(catalog_path: Path, public_key: Path | None = None) -> None
     catalog = load_json(catalog_path)
     if catalog.get("schema_version") != 1:
         raise ValidationError("catalog.schema_version must be 1")
-    if catalog.get("product_scope") != "google-xiaomi-android11-13":
+    if catalog.get("product_scope") != "pixel5-redfin-android11-14-global-provider":
         raise ValidationError("catalog.product_scope is invalid")
     entries = catalog.get("entries")
     if not isinstance(entries, list):

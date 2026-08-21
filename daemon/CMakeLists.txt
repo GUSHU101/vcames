@@ -13,13 +13,12 @@ if(ANDROID)
     add_executable(vcamesd
         src/config.cpp
         src/engine.cpp
-        src/http_mjpeg_source.cpp
+        src/ffmpeg_source.cpp
         src/image_transform.cpp
         src/main.cpp
         src/mjpeg_parser.cpp
-        src/network_policy.cpp
-        src/replacement_adapter.cpp
-        src/shared_frame_bus.cpp
+        src/stream_source.cpp
+        src/v4l2_sink.cpp
     )
     target_include_directories(vcamesd PRIVATE include third_party/stb)
     target_compile_options(vcamesd PRIVATE -Wall -Wextra -Werror)
@@ -29,9 +28,11 @@ if(ANDROID)
     add_executable(vcames-socket-proxy src/socket_proxy.cpp)
     target_compile_options(vcames-socket-proxy PRIVATE -Wall -Wextra -Werror)
 else()
+    enable_testing()
     add_library(vcames_parser STATIC
         src/config.cpp
         src/mjpeg_parser.cpp
+        src/stream_source.cpp
     )
     target_include_directories(vcames_parser PUBLIC include)
     if(MSVC)
@@ -39,22 +40,6 @@ else()
     else()
         target_compile_options(vcames_parser PRIVATE -Wall -Wextra -Werror)
     endif()
-
-    add_library(vcames_network_policy STATIC src/network_policy.cpp)
-    target_include_directories(vcames_network_policy PUBLIC include)
-    if(MSVC)
-        target_compile_options(vcames_network_policy PRIVATE /W4 /WX /permissive-)
-    else()
-        target_compile_options(vcames_network_policy PRIVATE -Wall -Wextra -Werror)
-    endif()
-    add_executable(vcames_network_policy_tests tests/network_policy_test.cpp)
-    target_link_libraries(vcames_network_policy_tests PRIVATE vcames_network_policy)
-    if(MSVC)
-        target_compile_options(vcames_network_policy_tests PRIVATE /W4 /WX /permissive-)
-    else()
-        target_compile_options(vcames_network_policy_tests PRIVATE -Wall -Wextra -Werror)
-    endif()
-    add_test(NAME vcames_network_policy_tests COMMAND vcames_network_policy_tests)
 
     add_library(vcames_image_transform STATIC src/image_transform.cpp)
     target_include_directories(vcames_image_transform PRIVATE include third_party/stb)
@@ -86,31 +71,6 @@ else()
     endif()
     add_test(NAME vcames_yuv420_tests COMMAND vcames_yuv420_tests)
 
-    if(UNIX AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        find_package(Threads REQUIRED)
-        add_library(vcames_adapter STATIC src/replacement_adapter.cpp)
-        target_include_directories(vcames_adapter PRIVATE include)
-        target_compile_options(vcames_adapter PRIVATE -Wall -Wextra -Werror)
-
-        add_library(vcames_frame_bus STATIC src/shared_frame_bus.cpp)
-        target_include_directories(vcames_frame_bus PUBLIC include)
-        target_compile_options(vcames_frame_bus PRIVATE -Wall -Wextra -Werror)
-
-        add_executable(vcames_frame_bus_tests tests/shared_frame_bus_test.cpp)
-        target_link_libraries(vcames_frame_bus_tests PRIVATE vcames_frame_bus)
-        target_compile_options(vcames_frame_bus_tests PRIVATE -Wall -Wextra -Werror)
-        add_test(NAME vcames_frame_bus_tests COMMAND vcames_frame_bus_tests)
-
-        add_executable(vcames_adapter_integration_tests
-            tests/replacement_adapter_integration_test.cpp)
-        target_link_libraries(vcames_adapter_integration_tests PRIVATE
-            vcames_adapter vcames_frame_bus Threads::Threads)
-        target_compile_options(vcames_adapter_integration_tests PRIVATE -Wall -Wextra -Werror)
-        add_test(NAME vcames_adapter_integration_tests
-            COMMAND vcames_adapter_integration_tests)
-    endif()
-
-    enable_testing()
     add_executable(vcames_parser_tests tests/parser_test.cpp)
     target_link_libraries(vcames_parser_tests PRIVATE vcames_parser)
     if(MSVC)
@@ -119,4 +79,13 @@ else()
         target_compile_options(vcames_parser_tests PRIVATE -Wall -Wextra -Werror)
     endif()
     add_test(NAME vcames_parser_tests COMMAND vcames_parser_tests)
+
+    add_executable(vcames_stream_source_tests tests/stream_source_test.cpp)
+    target_link_libraries(vcames_stream_source_tests PRIVATE vcames_parser)
+    if(MSVC)
+        target_compile_options(vcames_stream_source_tests PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(vcames_stream_source_tests PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME vcames_stream_source_tests COMMAND vcames_stream_source_tests)
 endif()

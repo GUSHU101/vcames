@@ -1,7 +1,6 @@
 #include "vcames/config.h"
 #include "vcames/engine.h"
 #include "vcames/image_transform.h"
-#include "vcames/replacement_adapter.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -19,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -35,6 +35,7 @@ namespace {
 
 std::string g_control_socket_name = "vcamesd";
 std::string g_frame_socket_name = "vcamesd_frames";
+std::string g_ffmpeg_path = "/data/adb/modules/vcames_root_bridge/bin/ffmpeg";
 constexpr size_t kMaxCommandBytes = 16 * 1024;
 constexpr uint32_t kMaxFrameBytes = 16 * 1024 * 1024;
 std::atomic<bool> g_stop{false};
@@ -42,6 +43,7 @@ std::atomic<int> g_control_listener{-1};
 std::atomic<int> g_frame_listener{-1};
 std::atomic<uid_t> g_extra_allowed_uid{static_cast<uid_t>(-1)};
 bool g_drop_to_system = false;
+bool g_prime_global_camera = false;
 
 void Log(const std::string& message) {
 #ifdef __ANDROID__
@@ -117,6 +119,10 @@ bool ParseArguments(int argc, char** argv, std::string* error) {
             g_drop_to_system = true;
             continue;
         }
+        if (argument == "--prime-global-camera") {
+            g_prime_global_camera = true;
+            continue;
+        }
         if ((argument == "--control-socket" || argument == "--frame-socket")
                 && index + 1 < argc) {
             const std::string_view socket_name(argv[++index]);
@@ -135,10 +141,25 @@ bool ParseArguments(int argc, char** argv, std::string* error) {
                                              : g_frame_socket_name) = socket_name;
             continue;
         }
+        if (argument == "--ffmpeg-path" && index + 1 < argc) {
+            const std::string_view path(argv[++index]);
+            if (path.empty() || path.front() != '/' || path.size() > 512
+                    || path.find_first_not_of(
+                            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_.-")
+                            != std::string_view::npos) {
+                if (error != nullptr) {
+                    *error = "FFmpeg path must be a safe absolute path";
+                }
+                return false;
+            }
+            g_ffmpeg_path = path;
+            continue;
+        }
         if (argument != "--allowed-uid" || index + 1 >= argc) {
             if (error != nullptr) {
                 *error = "usage: vcamesd [--allowed-uid APP_UID] [--drop-to-system] "
-                        "[--control-socket NAME] [--frame-socket NAME]";
+                        "[--control-socket NAME] [--frame-socket NAME] "
+                        "[--ffmpeg-path ABSOLUTE_PATH] [--prime-global-camera]";
             }
             return false;
         }
@@ -164,7 +185,7 @@ bool DropRootPrivileges(std::string* error) {
     }
     constexpr uid_t kSystemUid = 1000;
     constexpr gid_t kSystemGid = 1000;
-    const gid_t groups[] = {1003, 3003};  // AID_CAMERA, AID_INET.
+    const gid_t groups[] = {1003, 1006, 3003};  // AID_GRAPHICS, AID_CAMERA, AID_INET.
     if (getuid() != 0) {
         if (error != nullptr) {
             *error = "--drop-to-system requires vcamesd to start as uid 0";
@@ -221,6 +242,23 @@ void WriteAll(int fd, const std::string& response) {
     }
 }
 
+bool StartGlobalPlaceholder(vcames::Engine* engine, std::string* error) {
+    vcames::Config placeholder;
+    placeholder.url = "push://placeholder";
+    placeholder.video_device = "/dev/video100";
+    placeholder.width = 1280;
+    placeholder.height = 720;
+    placeholder.fps = 30;
+    if (!engine->Start(placeholder, error)) {
+        return false;
+    }
+    if (engine->WaitForFirstFrameWritten(std::chrono::seconds(5), error)) {
+        return true;
+    }
+    engine->Stop();
+    return false;
+}
+
 void HandleControlClient(int fd, vcames::Engine* engine) {
     if (!IsAllowedPeer(fd)) {
         WriteAll(fd, "{\"ok\":false,\"error\":\"permission denied\"}\n");
@@ -254,37 +292,32 @@ void HandleControlClient(int fd, vcames::Engine* engine) {
     }
     switch (command.type) {
         case vcames::CommandType::kStart: {
-            // Stop the previous health monitor before deactivating its
-            // adapter, otherwise a concurrent reconnect can race a reconfigure.
+            command.config.ffmpeg_path = g_ffmpeg_path;
             engine->Stop();
-            vcames::DeactivateReplacementAdapter();
-            if (!engine->Start(command.config, &error)) {
-                WriteAll(fd, "{\"ok\":false,\"error\":\""
-                        + vcames::JsonEscape(error) + "\"}\n");
-                return;
-            }
-            const int frame_bus_fd = engine->DuplicateFrameBusFd(&error);
-            if (frame_bus_fd < 0 || !vcames::ActivateReplacementAdapter(
-                        command.config,
-                        frame_bus_fd,
-                        engine->FrameBusDescriptor(),
-                        &error)) {
-                if (frame_bus_fd >= 0) {
-                    close(frame_bus_fd);
+            if (!engine->Start(command.config, &error)
+                    || !engine->WaitForFirstFrameWritten(
+                            std::chrono::seconds(5), &error)) {
+                if (g_prime_global_camera) {
+                    std::string ignored;
+                    StartGlobalPlaceholder(engine, &ignored);
                 }
-                engine->Stop();
                 WriteAll(fd, "{\"ok\":false,\"error\":\""
                         + vcames::JsonEscape(error) + "\"}\n");
                 return;
             }
-            close(frame_bus_fd);
-            engine->SetReplacementAttached(true);
             WriteAll(fd, engine->StatusJson() + "\n");
             return;
         }
         case vcames::CommandType::kStop:
-            engine->Stop();
-            vcames::DeactivateReplacementAdapter();
+            if (g_prime_global_camera) {
+                if (!StartGlobalPlaceholder(engine, &error)) {
+                    WriteAll(fd, "{\"ok\":false,\"error\":\""
+                            + vcames::JsonEscape(error) + "\"}\n");
+                    return;
+                }
+            } else {
+                engine->Stop();
+            }
             WriteAll(fd, engine->StatusJson() + "\n");
             return;
         case vcames::CommandType::kStatus:
@@ -455,6 +488,12 @@ int main(int argc, char** argv) {
     }
 
     vcames::Engine engine;
+    if (g_prime_global_camera && !StartGlobalPlaceholder(&engine, &error)) {
+        Log("global V4L2 placeholder failed: " + error);
+        close(frame_listener);
+        close(control_listener);
+        return 1;
+    }
     Log("ready");
     std::thread frame_server(FrameServer, frame_listener, &engine);
     ControlServer(control_listener, &engine);
@@ -467,7 +506,6 @@ int main(int argc, char** argv) {
         frame_server.join();
     }
     engine.Stop();
-    vcames::DeactivateReplacementAdapter();
     const int control = g_control_listener.exchange(-1, std::memory_order_relaxed);
     if (control >= 0) {
         close(control);
